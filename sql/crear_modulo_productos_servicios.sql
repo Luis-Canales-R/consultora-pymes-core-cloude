@@ -176,3 +176,4 @@ FROM tbl_productos_servicios p
 INNER JOIN cat_tipos_item t ON p.id_tipo_item = t.id_tipo_item
 LEFT JOIN costo_hh hh ON p.id_item = hh.id_item
 LEFT JOIN costo_insumos ins ON p.id_item = ins.id_item;
+GO

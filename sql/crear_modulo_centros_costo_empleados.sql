@@ -74,3 +74,4 @@ SELECT
     cc.nombre_cc AS centro_costo
 FROM tbl_empleados_usuarios e
 INNER JOIN tbl_centros_costo cc ON e.id_centro_costo = cc.id_centro_costo;
+GO

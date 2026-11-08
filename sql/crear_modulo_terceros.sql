@@ -113,3 +113,4 @@ CREATE TABLE tbl_terceros_extension_proveedor (
     CONSTRAINT fk_ext_prov_tipo FOREIGN KEY (id_tipo_proveedor) REFERENCES cat_tipos_proveedor(id_tipo_proveedor),
     CONSTRAINT fk_ext_prov_pago FOREIGN KEY (id_condicion_pago) REFERENCES cat_condiciones_pago(id_condicion_pago)
 );
+GO
