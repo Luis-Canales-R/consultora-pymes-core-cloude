@@ -1,0 +1,129 @@
+// ==========================================
+// MÓDULO: PRODUCTOS, SERVICIOS Y COMPOSICIÓN DE COSTOS (BOM / CBS)
+// ==========================================
+
+Table cat_tipos_item {
+  id_tipo_item integer [primary key]
+  codigo varchar(20) [unique, not null] // PRODUCTO, SERVICIO
+  nombre varchar(50) [not null]
+}
+
+Table cat_unidades_medida {
+  id_unidad_medida integer [primary key]
+  codigo varchar(10) [unique, not null] // UN, HRS, MES, KG
+  nombre varchar(50) [not null]
+}
+
+Table cat_categorias_item {
+  id_categoria_item integer [primary key]
+  codigo varchar(30) [unique, not null] // CONSULTORIA, LICENCIAMIENTO, INSUMOS
+  nombre varchar(100) [not null]
+}
+
+Table cat_perfiles_hh {
+  id_perfil_hh integer [primary key]
+  codigo varchar(30) [unique, not null] // JR, SR, GERENTE, ESPECIALISTA
+  nombre varchar(100) [not null]
+  costo_hora_referencia decimal [not null]
+}
+
+Table cat_insumos_recursos {
+  id_insumo integer [primary key]
+  codigo varchar(30) [unique, not null]
+  nombre varchar(100) [not null]
+  costo_unitario_referencia decimal [not null]
+}
+
+Table tbl_productos_servicios {
+  id_item integer [primary key]
+  sku_codigo varchar(50) [unique, not null]
+  nombre varchar(150) [not null]
+  descripcion varchar(250)
+  id_tipo_item integer [not null]        
+  id_categoria_item integer [not null]   
+  id_unidad_medida integer [not null]    
+  precio_venta_base decimal [not null]
+  aplica_iva boolean [not null]
+  id_cuenta_ingreso integer              // v3: cuenta contable de Ingreso al vender este ítem
+  id_cuenta_costo_gasto integer          // v3: cuenta contable de Costo/Gasto al comprar este ítem
+  modo_obtencion varchar(20)             // v4/v6: COMPRADO_REVENTA | FABRICADO | SERVICIO | NULL (sin clasificar). Determina el mecanismo de costeo directo al vender.
+  estado_activo boolean
+  created_at timestamp
+}
+
+Ref: tbl_productos_servicios.id_tipo_item > cat_tipos_item.id_tipo_item
+Ref: tbl_productos_servicios.id_categoria_item > cat_categorias_item.id_categoria_item
+Ref: tbl_productos_servicios.id_unidad_medida > cat_unidades_medida.id_unidad_medida
+Ref: tbl_productos_servicios.id_cuenta_ingreso > cat_plan_cuentas.id_cuenta
+Ref: tbl_productos_servicios.id_cuenta_costo_gasto > cat_plan_cuentas.id_cuenta
+
+// v4 (Costeo Directo por Flujo de Venta): kardex de inventario (CPP) para
+// ítems COMPRADO_REVENTA. Ver sql/crear_modulo_inventario_costeo.sql.
+Table tbl_movimientos_inventario {
+  id_movimiento_inventario integer [primary key]
+  fecha_movimiento timestamp [not null]
+  id_item integer                        // XOR con id_insumo (CHECK en SQL)
+  id_insumo integer
+  tipo_movimiento varchar(10) [not null] // ENTRADA | SALIDA
+  cantidad decimal [not null]
+  costo_unitario_movimiento decimal [not null]
+  saldo_cantidad decimal [not null]      // saldo DESPUÉS de este movimiento
+  saldo_valor decimal [not null]
+  costo_promedio_resultante decimal [not null]
+  origen_documento varchar(30) [not null] // COMPRA | VENTA | CONSUMO_PRODUCCION | AJUSTE
+  id_referencia integer                  // id_orden_compra / id_venta_devengada según origen_documento
+  glosa varchar(250)
+  created_at timestamp
+}
+
+Ref: tbl_movimientos_inventario.id_item > tbl_productos_servicios.id_item
+Ref: tbl_movimientos_inventario.id_insumo > cat_insumos_recursos.id_insumo
+
+// Extensiones de Rol 1:1 (Patrón ERP)
+Table tbl_item_extension_producto {
+  id_item integer [primary key]
+  controla_stock boolean [not null, default: true]
+  stock_minimo decimal
+  punto_reorden decimal
+  peso_kg decimal
+  volumen_m3 decimal
+}
+
+Ref: tbl_item_extension_producto.id_item - tbl_productos_servicios.id_item
+
+Table tbl_item_extension_servicio {
+  id_item integer [primary key]
+  modalidad_entrega varchar(50)
+  sla_horas_entrega integer
+  requiere_soporte_postventa boolean [not null, default: false]
+}
+
+Ref: tbl_item_extension_servicio.id_item - tbl_productos_servicios.id_item
+
+// Estructura de Composición Dinámica (BOM / CBS)
+Table tbl_item_composicion_hh {
+  id_composicion_hh integer [primary key]
+  id_item integer [not null]
+  id_perfil_hh integer [not null]
+  cantidad_horas decimal [not null]
+}
+
+Ref: tbl_item_composicion_hh.id_item > tbl_productos_servicios.id_item
+Ref: tbl_item_composicion_hh.id_perfil_hh > cat_perfiles_hh.id_perfil_hh
+
+Table tbl_item_composicion_insumos {
+  id_composicion_insumo integer [primary key]
+  id_item integer [not null]
+  id_insumo integer [not null]
+  cantidad decimal [not null]
+}
+
+Ref: tbl_item_composicion_insumos.id_item > tbl_productos_servicios.id_item
+Ref: tbl_item_composicion_insumos.id_insumo > cat_insumos_recursos.id_insumo
+
+// ==========================================
+// STUB DE TABLA EXTERNA (v3, para resolución del linter en VS Code)
+// ==========================================
+Table cat_plan_cuentas {
+  id_cuenta integer [primary key]
+}

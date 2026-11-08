@@ -1,0 +1,184 @@
+// ==========================================
+// MÓDULO: DATA WAREHOUSE EN ESTRELLA (esquema `dw`) -- Fase B
+// Capa 3 del framework de 4 capas (Origen/Ingesta -> Transformación/
+// Calidad -> Enriquecimiento/Negocio/Core Analítico y Linaje -> Consumo/
+// Gobierno). Ver sql/crear_esquema_dw.sql y sql/sp_cargar_dw.sql.
+//
+// v8 (SCD Tipo 2): dim_cuenta_contable, dim_centro_costo, dim_tercero,
+// dim_empleado y dim_item ahora historizan cambios de atributos -- cada
+// una tiene su propia clave surrogada (sk_*, PK real) y la clave natural
+// (id_*) deja de ser única (se repite una fila por versión histórica).
+// dim_tiempo NO se historiza (aditiva por naturaleza).
+// ==========================================
+
+Table dw.dim_tiempo {
+  id_fecha integer [primary key] // AAAAMMDD
+  fecha date [not null]
+  anio integer [not null]
+  mes integer [not null]
+  nombre_mes varchar(20) [not null]
+  dia integer [not null]
+  nombre_dia varchar(20) [not null]
+  trimestre integer [not null]
+  periodo_contable varchar(7) [not null] // 'AAAA-MM'
+  es_fin_de_semana boolean [not null]
+}
+
+// v8 (SCD Tipo 2) de dbo.cat_plan_cuentas
+Table dw.dim_cuenta_contable {
+  sk_cuenta_contable integer [primary key] // v8: clave surrogada
+  id_cuenta integer [not null]             // clave natural (se repite por versión)
+  codigo_cuenta varchar(20) [not null]
+  nombre_cuenta varchar(150) [not null]
+  nivel integer [not null]
+  id_cuenta_padre integer
+  naturaleza varchar(10) [not null]
+  tipo_cuenta varchar(20) [not null] // ACTIVO/PASIVO/PATRIMONIO/INGRESO/COSTO/GASTO
+  es_imputable boolean [not null]
+  estado_activo boolean [not null]
+  fecha_inicio_vigencia date [not null] // v8
+  fecha_fin_vigencia date               // v8: NULL = versión vigente
+  es_vigente boolean [not null]         // v8
+}
+
+// v8 (SCD Tipo 2) de dbo.tbl_centros_costo
+Table dw.dim_centro_costo {
+  sk_centro_costo integer [primary key]
+  id_centro_costo integer [not null]
+  codigo_cc varchar(30) [not null]
+  nombre_cc varchar(150) [not null]
+  nivel integer [not null]
+  id_centro_padre integer // referencia a la clave NATURAL del padre (no a un sk)
+  es_activo boolean [not null]
+  fecha_inicio_vigencia date [not null]
+  fecha_fin_vigencia date
+  es_vigente boolean [not null]
+}
+
+// v8 (SCD Tipo 2) de dbo.tbl_terceros (+ flags derivados de las extensiones)
+Table dw.dim_tercero {
+  sk_tercero integer [primary key]
+  id_tercero integer [not null]
+  codigo_tercero varchar(50) [not null]
+  razon_social varchar(200) [not null]
+  nombre_fantasia varchar(150)
+  rut_dni varchar(20) [not null]
+  comuna_ciudad varchar(100)
+  es_cliente boolean [not null]
+  es_proveedor boolean [not null]
+  estado_activo boolean [not null]
+  fecha_inicio_vigencia date [not null]
+  fecha_fin_vigencia date
+  es_vigente boolean [not null]
+}
+
+// v8 (SCD Tipo 2) de dbo.tbl_empleados_usuarios
+Table dw.dim_empleado {
+  sk_empleado integer [primary key]
+  id_empleado integer [not null]
+  rut_dni varchar(20) [not null]
+  nombre_completo varchar(150) [not null]
+  cargo varchar(100)
+  id_centro_costo integer // referencia a la clave NATURAL del centro de costo (no a un sk)
+  es_activo boolean [not null]
+  fecha_inicio_vigencia date [not null]
+  fecha_fin_vigencia date
+  es_vigente boolean [not null]
+}
+
+// v8 (SCD Tipo 2) de dbo.tbl_productos_servicios, incluyendo modo_obtencion
+// (v4/v6) -- caso motivador de la historización: un ítem puede cambiar de
+// modo_obtencion en el tiempo y las ventas históricas deben seguir
+// reportando el modo_obtencion vigente AL MOMENTO de cada venta.
+Table dw.dim_item {
+  sk_item integer [primary key]
+  id_item integer [not null]
+  sku_codigo varchar(50) [not null]
+  nombre varchar(150) [not null]
+  tipo_item varchar(20) [not null] // PRODUCTO | SERVICIO
+  categoria_item varchar(100)
+  modo_obtencion varchar(20) // v4/v6: COMPRADO_REVENTA | FABRICADO | SERVICIO | NULL
+  precio_venta_base decimal [not null]
+  estado_activo boolean [not null]
+  fecha_inicio_vigencia date [not null]
+  fecha_fin_vigencia date
+  es_vigente boolean [not null]
+}
+
+// ==========================================
+// HECHO CENTRAL -- grano: 1 fila = 1 línea de dbo.tbl_asientos_detalle.
+// Desde aquí se reconstruyen Balance General y Estado de Resultados
+// (ver dw.vw_dw_balance_general / dw.vw_dw_estado_resultados). v8: guarda
+// clave natural (degenerada, "estado actual") + clave surrogada (point-
+// in-time, resuelta por fecha del asiento en la carga).
+// ==========================================
+Table dw.fact_asientos_contables {
+  id_asiento_detalle integer [primary key] // = dbo.tbl_asientos_detalle.id_asiento_detalle
+  id_asiento integer [not null]            // degenerada: cabecera del asiento
+  numero_asiento integer [not null]
+  id_transaccion integer                   // degenerada: documento comercial de origen
+  id_fecha integer [not null]
+  id_cuenta integer [not null]             // v8: clave natural (degenerada)
+  sk_cuenta_contable integer [not null]    // v8: clave surrogada, point-in-time
+  id_centro_costo integer                  // v8: clave natural (degenerada)
+  sk_centro_costo integer                  // v8: clave surrogada, point-in-time
+  periodo_contable varchar(7) [not null]
+  glosa_general varchar(250) [not null]
+  glosa_detalle varchar(250)
+  debe decimal [not null]
+  haber decimal [not null]
+  monto_neto decimal [not null] // debe - haber
+  fecha_carga timestamp [not null]
+}
+
+Ref: dw.fact_asientos_contables.id_fecha > dw.dim_tiempo.id_fecha
+Ref: dw.fact_asientos_contables.sk_cuenta_contable > dw.dim_cuenta_contable.sk_cuenta_contable
+Ref: dw.fact_asientos_contables.sk_centro_costo > dw.dim_centro_costo.sk_centro_costo
+
+// ==========================================
+// HECHO SECUNDARIO -- grano: 1 fila = 1 línea de dbo.tbl_ventas_detalle.
+// costo_directo / margen_contribucion ya resueltos por línea de venta
+// según el Costeo Directo por Flujo de Venta (v4/v6/v7). v8: mismo patrón
+// de claves natural + surrogada que fact_asientos_contables.
+// ==========================================
+Table dw.fact_margen_venta {
+  id_venta_detalle integer [primary key] // = dbo.tbl_ventas_detalle.id_venta_detalle
+  id_venta_devengada integer [not null]  // degenerada: cabecera de la venta
+  folio_factura varchar(50) [not null]
+  id_fecha integer [not null]
+  id_item integer [not null]             // v8: clave natural (degenerada)
+  sk_item integer [not null]             // v8: clave surrogada, point-in-time
+  id_tercero integer [not null]          // v8: clave natural (degenerada, cliente)
+  sk_tercero integer [not null]          // v8: clave surrogada, point-in-time
+  id_centro_costo integer                // v8: clave natural (degenerada)
+  sk_centro_costo integer                // v8: clave surrogada, point-in-time
+  id_empleado integer                    // v8: clave natural (degenerada)
+  sk_empleado integer                    // v8: clave surrogada, point-in-time
+  modo_obtencion varchar(20)             // v12: denormalizado desde dim_item, point-in-time (ya no es el estado actual de dbo)
+  cantidad decimal [not null]
+  precio_unitario decimal [not null]
+  ingreso_neto decimal [not null]
+  costo_directo decimal [not null]
+  margen_contribucion decimal [not null]
+  fecha_carga timestamp [not null]
+}
+
+Ref: dw.fact_margen_venta.id_fecha > dw.dim_tiempo.id_fecha
+Ref: dw.fact_margen_venta.sk_item > dw.dim_item.sk_item
+Ref: dw.fact_margen_venta.sk_tercero > dw.dim_tercero.sk_tercero
+Ref: dw.fact_margen_venta.sk_centro_costo > dw.dim_centro_costo.sk_centro_costo
+Ref: dw.fact_margen_venta.sk_empleado > dw.dim_empleado.sk_empleado
+
+// ==========================================
+// v9: CARGA INCREMENTAL. Alta marca (high-water mark) por tabla de
+// hechos, usada por dw.sp_cargar_dw_incremental para traer solo las
+// filas de dbo con clave natural mayor a la ya cargada. Supone que las
+// tablas OLTP de origen (tbl_asientos_detalle, tbl_ventas_detalle) son
+// de solo-inserción (verificado en el código: nunca se les hace UPDATE
+// ni DELETE).
+// ==========================================
+Table dw.tbl_control_carga_incremental {
+  nombre_hecho varchar(60) [primary key]  // 'fact_asientos_contables' | 'fact_margen_venta'
+  ultima_clave_cargada integer [not null] // MAX(id_asiento_detalle) / MAX(id_venta_detalle) ya cargado
+  fecha_ultima_carga timestamp [not null]
+}

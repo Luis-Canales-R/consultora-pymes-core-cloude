@@ -1,0 +1,55 @@
+// ==========================================
+// FASE 2: TABLAS DE MAPEO Y HOMOLOGACIÓN (TRANSICIÓN DE DATOS)
+// ==========================================
+
+// Mapeo de Clientes / Terceros (Alias informal -> ID Oficial)
+Table map_clientes {
+  id_map_cliente integer [primary key]
+  nombre_informal_excel varchar(150) [unique, not null]
+  id_tercero_oficial integer [not null]
+  observaciones varchar(250)
+  created_at timestamp
+}
+
+// Mapeo de Productos y Servicios (Descripción libre -> SKU Oficial)
+Table map_productos {
+  id_map_producto integer [primary key]
+  descripcion_libre_excel varchar(150) [unique, not null]
+  id_item_oficial integer [not null]
+  observaciones varchar(250)
+  created_at timestamp
+}
+
+// v7 (Kardex Real de Insumos): Mapeo de Insumos/Materias Primas (Descripción
+// libre -> Insumo Oficial). Homologa la columna item_informal_raw de la
+// pestaña Compras_y_Gastos cuando la compra es de un insumo (no de un ítem
+// de tbl_productos_servicios).
+Table map_insumos {
+  id_map_insumo integer [primary key]
+  descripcion_libre_excel varchar(150) [unique, not null]
+  id_insumo_oficial integer [not null]
+  observaciones varchar(255)
+  created_at timestamp
+}
+
+// ==========================================
+// ESTUBS DE TABLAS EXTERNAS (Para resolución del linter en VS Code)
+// ==========================================
+Table tbl_terceros {
+  id_tercero integer [primary key]
+}
+
+Table tbl_productos_servicios {
+  id_item integer [primary key]
+}
+
+Table cat_insumos_recursos {
+  id_insumo integer [primary key]
+}
+
+// ==========================================
+// REFERENCIAS Y RELACIONES (FKs)
+// ==========================================
+Ref: map_clientes.id_tercero_oficial > tbl_terceros.id_tercero
+Ref: map_productos.id_item_oficial > tbl_productos_servicios.id_item
+Ref: map_insumos.id_insumo_oficial > cat_insumos_recursos.id_insumo

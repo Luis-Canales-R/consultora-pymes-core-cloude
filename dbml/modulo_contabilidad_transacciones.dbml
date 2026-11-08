@@ -1,0 +1,82 @@
+// ==========================================
+// MÓDULO: PLAN DE CUENTAS, ASENTAMIENTO CONTABLE Y TRANSACCIONES
+// ==========================================
+
+// Catálogo Jerárquico del Plan de Cuentas (Modelo BI / ERP Chile)
+Table cat_plan_cuentas {
+  id_cuenta integer [primary key]
+  codigo_cuenta varchar(20) [unique, not null] // Ej: 1.1.01.002
+  nombre_cuenta varchar(150) [not null]
+  nivel integer [not null]                    // 1: Clase, 2: Subgrupo, 3: Cuenta, 4: Subcuenta
+  id_cuenta_padre integer                     // Auto-referencia para árbol jerárquico
+  naturaleza varchar(10) [not null]           // DEUDORA, ACREEDORA
+  tipo_cuenta varchar(20) [not null]          // v3: ACTIVO, PASIVO, PATRIMONIO, INGRESO, COSTO, GASTO
+  es_imputable boolean [not null]             // True: acepta asientos | False: es de agrupar
+  estado_activo boolean [default: true]
+}
+
+Ref: cat_plan_cuentas.id_cuenta_padre > cat_plan_cuentas.id_cuenta
+
+// Tipos de Transacción Comercial / Comprobante Contable
+Table cat_tipos_transaccion {
+  id_tipo_transaccion integer [primary key]
+  codigo varchar(20) [unique, not null] // INGRESO, EGRESO, TRASPASO, FACTURA_VENTA, FACTURA_COMPRA
+  nombre varchar(50) [not null]
+}
+
+// Cabecera Comercial (Documento de Respaldo)
+Table tbl_transacciones_cabecera {
+  id_transaccion integer [primary key]
+  folio_documento varchar(50) [not null]
+  id_tipo_transaccion integer [not null]
+  id_tercero integer [not null]              // Vinculado a Módulo 1 (Terceros)
+  fecha_emision date [not null]
+  fecha_vencimiento date
+  monto_neto decimal [not null]
+  monto_iva decimal [not null]
+  monto_total decimal [not null]
+  estado_operacion varchar(20) [not null]    // DEVENGADO, LIQUIDADO, ANULADO
+  created_at timestamp
+}
+
+Ref: tbl_transacciones_cabecera.id_tipo_transaccion > cat_tipos_transaccion.id_tipo_transaccion
+Ref: tbl_transacciones_cabecera.id_tercero > tbl_terceros.id_tercero
+
+// Asiento Contable (Cabecera de Partida Doble)
+Table tbl_asientos_cabecera {
+  id_asiento integer [primary key]
+  id_transaccion integer                     // Opcional: Documento comercial que lo origina
+  numero_asiento integer [not null]
+  fecha_asiento date [not null]
+  glosa_general varchar(250) [not null]
+  periodo_contable varchar(7) [not null]     // Ej: '2026-10'
+  created_at timestamp
+}
+
+Ref: tbl_asientos_cabecera.id_transaccion > tbl_transacciones_cabecera.id_transaccion
+
+// Detalle de Asiento Contable (Partida Doble: Debe vs. Haber)
+Table tbl_asientos_detalle {
+  id_asiento_detalle integer [primary key]
+  id_asiento integer [not null]
+  id_cuenta integer [not null]
+  debe decimal [not null, default: 0.00]
+  haber decimal [not null, default: 0.00]
+  id_centro_costo integer                    // v3: imputación a centro de costo (control de gestión)
+  glosa_detalle varchar(250)
+}
+
+Ref: tbl_asientos_detalle.id_asiento > tbl_asientos_cabecera.id_asiento
+Ref: tbl_asientos_detalle.id_cuenta > cat_plan_cuentas.id_cuenta
+Ref: tbl_asientos_detalle.id_centro_costo > tbl_centros_costo.id_centro_costo
+
+// ==========================================
+// ESTUBS DE TABLAS EXTERNAS (Para resolución del linter en VS Code)
+// ==========================================
+Table tbl_terceros {
+  id_tercero integer [primary key]
+}
+
+Table tbl_centros_costo {
+  id_centro_costo integer [primary key]
+}

@@ -1,0 +1,123 @@
+// ==========================================
+// MÓDULO: TRANSACCIONES GRANULARES (COMPRAS, VENTAS Y TESORERÍA)
+// ==========================================
+
+// Órdenes de Compra (Cabecera)
+Table tbl_ordenes_compra {
+  id_orden_compra integer [primary key]
+  folio_oc varchar(50) [unique, not null]
+  id_tercero integer [not null] // Proveedor (tbl_terceros)
+  fecha_emision date [not null]
+  fecha_entrega_esperada date
+  monto_neto decimal [not null]
+  monto_iva decimal [not null]
+  monto_total decimal [not null]
+  estado_oc varchar(30) [not null] // BORRADOR, APROBADA, RECIBIDA, ANULADA
+  id_centro_costo integer // v3: Centro de costo que solicita/recibe la compra
+  id_empleado integer // v3: Empleado responsable/comprador
+  created_at timestamp
+}
+
+// Detalle de Compras (Ítems)
+Table tbl_compras_detalle {
+  id_compra_detalle integer [primary key]
+  id_orden_compra integer [not null]
+  id_item integer [null] // tbl_productos_servicios (XOR con id_insumo)
+  id_insumo integer [null] // v7: cat_insumos_recursos (XOR con id_item)
+  cantidad decimal [not null]
+  precio_unitario decimal [not null]
+  porcentaje_descuento decimal [default: 0.00]
+  subtotal_neto decimal [not null]
+}
+
+// Ventas Devengadas (Cabecera)
+Table tbl_ventas_devengadas {
+  id_venta_devengada integer [primary key]
+  folio_factura varchar(50) [unique, not null]
+  id_tercero integer [not null] // Cliente / Sponsor (tbl_terceros)
+  fecha_emision date [not null]
+  fecha_vencimiento date
+  monto_neto decimal [not null]
+  monto_iva decimal [not null]
+  monto_total decimal [not null]
+  estado_venta varchar(30) [not null] // DEVENGADO, FACTURADO, PAGADO, ANULADO
+  id_centro_costo integer // v3: Centro de costo que genera la venta
+  id_empleado integer // v3: Vendedor / responsable comercial
+  created_at timestamp
+}
+
+// Detalle de Ventas (Ítems)
+Table tbl_ventas_detalle {
+  id_venta_detalle integer [primary key]
+  id_venta_devengada integer [not null]
+  id_item integer [not null] // tbl_productos_servicios
+  cantidad decimal [not null]
+  precio_unitario decimal [not null]
+  porcentaje_descuento decimal [default: 0.00]
+  subtotal_neto decimal [not null]
+}
+
+// Movimientos de Caja / Tesorería (Capa de Liquidez con montos absolutos y dirección)
+Table tbl_movimientos_caja {
+  id_movimiento integer [primary key]
+  fecha_movimiento date [not null]
+  id_cuenta_bancaria integer [not null] // cat_plan_cuentas
+  tipo_flujo varchar(30) [not null] // INGRESO, EGRESO, TRASPASO_HASTA, TRASPASO_DESDE
+  monto_absoluto decimal [not null] // Siempre positivo
+  glosa_movimiento varchar(250) [not null]
+  id_tercero integer // Opcional (tbl_terceros)
+  id_centro_costo integer // v3: Centro de costo imputado al movimiento
+  id_empleado integer // v3: Empleado responsable del movimiento
+  created_at timestamp
+}
+
+// ==========================================
+// REFERENCIAS Y RELACIONES (FKs)
+// ==========================================
+Ref: tbl_compras_detalle.id_orden_compra > tbl_ordenes_compra.id_orden_compra
+Ref: tbl_compras_detalle.id_item > tbl_productos_servicios.id_item
+Ref: tbl_compras_detalle.id_insumo > cat_insumos_recursos.id_insumo
+
+Ref: tbl_ventas_detalle.id_venta_devengada > tbl_ventas_devengadas.id_venta_devengada
+Ref: tbl_ventas_detalle.id_item > tbl_productos_servicios.id_item
+
+Ref: tbl_movimientos_caja.id_cuenta_bancaria > cat_plan_cuentas.id_cuenta
+
+Ref: tbl_ordenes_compra.id_tercero > tbl_terceros.id_tercero
+Ref: tbl_ventas_devengadas.id_tercero > tbl_terceros.id_tercero
+Ref: tbl_movimientos_caja.id_tercero > tbl_terceros.id_tercero
+
+// v3: Centro de Costo / Empleado en las 3 tablas transaccionales
+Ref: tbl_ordenes_compra.id_centro_costo > tbl_centros_costo.id_centro_costo
+Ref: tbl_ordenes_compra.id_empleado > tbl_empleados_usuarios.id_empleado
+Ref: tbl_ventas_devengadas.id_centro_costo > tbl_centros_costo.id_centro_costo
+Ref: tbl_ventas_devengadas.id_empleado > tbl_empleados_usuarios.id_empleado
+Ref: tbl_movimientos_caja.id_centro_costo > tbl_centros_costo.id_centro_costo
+Ref: tbl_movimientos_caja.id_empleado > tbl_empleados_usuarios.id_empleado
+
+// ==========================================
+// ESTUBS DE TABLAS EXTERNAS (Para resolución del linter en VS Code)
+// ==========================================
+Table tbl_terceros {
+  id_tercero integer [primary key]
+}
+
+Table cat_plan_cuentas {
+  id_cuenta integer [primary key]
+}
+
+Table tbl_productos_servicios {
+  id_item integer [primary key]
+}
+
+Table tbl_centros_costo {
+  id_centro_costo integer [primary key]
+}
+
+Table tbl_empleados_usuarios {
+  id_empleado integer [primary key]
+}
+
+Table cat_insumos_recursos {
+  id_insumo integer [primary key]
+}

@@ -1,0 +1,13 @@
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+
+# SQL Server / SSMS
+*.bak
+*.ldf
+*.mdf
+*.ndf
+
+# OS
+.DS_Store
+Thumbs.db

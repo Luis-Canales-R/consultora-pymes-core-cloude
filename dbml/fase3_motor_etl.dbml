@@ -1,0 +1,42 @@
+// ====================================================================
+// Proyecto: Sistema RDBMS para PyMEs (Fase 3)
+// Modelado de Datos: Tabla de Auditoría de Errores del Motor ETL
+// ====================================================================
+
+Table tbl_log_errores_etl {
+  id_log integer [primary key, increment, note: "Identificador único de la incidencia"]
+  nombre_archivo varchar(150) [not null, note: "Nombre de la plantilla Excel procesada"]
+  pestana_origen varchar(50) [not null, note: "Pestaña evaluada (Ventas_Devengadas, Compras_y_Gastos, Movimientos_Caja)"]
+  numero_fila integer [not null, note: "Número de fila exacta en el archivo Excel"]
+  tipo_error varchar(50) [not null, note: "Categoría del fallo (CLIENTE_NO_HOMOLOGADO, FORMATO_FECHA_INVALIDO, MONTO_INVALIDO, etc.)"]
+  detalle_mensaje varchar(500) [not null, note: "Descripción detallada del motivo del rechazo"]
+  fecha_intento datetime [default: `getdate()`, note: "Timestamp de la ejecución del motor ETL"]
+}
+
+// ====================================================================
+// ÁREA DE STAGING (v2): recibe las 3 pestañas en forma "cruda" (texto),
+// sin tipar fecha/montos, para que el SP sea quien valide y audite.
+// ====================================================================
+Table tbl_staging_carga {
+  id_staging integer [primary key, increment]
+  nombre_archivo varchar(150) [not null, note: "Identifica la corrida de carga"]
+  pestana_origen varchar(50) [not null, note: "Ventas_Devengadas | Compras_y_Gastos | Movimientos_Caja"]
+  numero_fila integer [not null]
+  folio_documento_raw varchar(50)
+  tercero_informal_raw varchar(150)
+  item_informal_raw varchar(150)
+  cantidad_raw varchar(50)
+  precio_unitario_raw varchar(50)
+  estado_documento_raw varchar(30)
+  cuenta_bancaria_raw varchar(50)
+  tipo_flujo_raw varchar(30)
+  monto_absoluto_raw varchar(50)
+  fecha_raw varchar(20) [note: "Texto crudo; se valida AAAA-MM-DD en el SP, no en la columna"]
+  monto_total_raw varchar(50)
+  glosa varchar(250)
+  centro_costo_raw varchar(30) [note: "v3: codigo_cc, común a las 3 pestañas. Se valida por código directo, no se homologa."]
+  empleado_raw varchar(20) [note: "v3: rut_dni, común a las 3 pestañas. Se valida por RUT directo, no se homologa."]
+  estado_carga varchar(30) [default: "PENDIENTE", note: "PENDIENTE | CARGADO | RECHAZADO"]
+  fecha_proceso datetime
+  created_at datetime [default: `getdate()`]
+}

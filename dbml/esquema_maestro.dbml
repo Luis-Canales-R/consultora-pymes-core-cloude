@@ -1,0 +1,106 @@
+// ==========================================
+// CATÁLOGOS AUXILIARES COMPARTIDOS
+// ==========================================
+
+Table cat_paises {
+  id_pais integer [primary key]
+  codigo_iso varchar(3) [unique, not null]
+  nombre_pais varchar(100) [not null]
+}
+
+Table cat_condiciones_pago {
+  id_condicion_pago integer [primary key]
+  codigo varchar(50) [unique, not null]
+  descripcion varchar(100) [not null]
+  dias integer [not null]
+}
+
+Table cat_tipos_persona {
+  id_tipo_persona integer [primary key]
+  codigo varchar(20) [unique, not null]
+  nombre varchar(50) [not null]
+}
+
+Table cat_roles {
+  id_rol integer [primary key]
+  codigo varchar(30) [unique, not null]
+  nombre varchar(100) [not null]
+}
+
+Table cat_tipos_cliente_negocio {
+  id_tipo_cliente_negocio integer [primary key]
+  codigo varchar(50) [unique, not null]
+  nombre varchar(100) [not null]
+}
+
+Table cat_tipos_proveedor {
+  id_tipo_proveedor integer [primary key]
+  codigo varchar(50) [unique, not null]
+  nombre varchar(100) [not null]
+}
+
+// ==========================================
+// NÚCLEO: MAESTRO UNIFICADO DE TERCEROS
+// ==========================================
+
+Table tbl_terceros {
+  id_tercero integer [primary key]
+  codigo_tercero varchar(50) [unique, not null]
+  id_tipo_persona integer [not null]
+  razon_social varchar(200) [not null]
+  nombre_fantasia varchar(150)
+  rut_dni varchar(20) [unique, not null]
+  direccion varchar(250)
+  comuna_ciudad varchar(100)
+  id_pais integer [not null]
+  contacto_nombre varchar(100)
+  contacto_email varchar(100)
+  telefono varchar(30)
+  estado_activo boolean
+  created_at timestamp
+}
+
+// Relaciones Base del Tercero
+Ref: tbl_terceros.id_tipo_persona > cat_tipos_persona.id_tipo_persona
+Ref: tbl_terceros.id_pais > cat_paises.id_pais
+
+// ==========================================
+// ASIGNACIÓN DE ROLES (N:M)
+// ==========================================
+
+Table rel_terceros_roles {
+  id_tercero integer
+  id_rol integer
+  primary key (id_tercero, id_rol)
+}
+
+Ref: rel_terceros_roles.id_tercero > tbl_terceros.id_tercero
+Ref: rel_terceros_roles.id_rol > cat_roles.id_rol
+
+// ==========================================
+// EXTENSIONES ESPECÍFICAS POR ROL
+// ==========================================
+
+// Si actúa como Cliente
+Table tbl_terceros_extension_cliente {
+  id_tercero integer [primary key]
+  id_tipo_cliente_negocio integer [not null]
+  id_condicion_pago integer [not null]
+  limite_credito decimal
+}
+
+Ref: tbl_terceros_extension_cliente.id_tercero > tbl_terceros.id_tercero
+Ref: tbl_terceros_extension_cliente.id_tipo_cliente_negocio > cat_tipos_cliente_negocio.id_tipo_cliente_negocio
+Ref: tbl_terceros_extension_cliente.id_condicion_pago > cat_condiciones_pago.id_condicion_pago
+
+// Si actúa como Proveedor
+Table tbl_terceros_extension_proveedor {
+  id_tercero integer [primary key]
+  id_tipo_proveedor integer [not null]
+  id_condicion_pago integer [not null]
+  banco_cuenta_detalles varchar(250)
+}
+
+Ref: tbl_terceros_extension_proveedor.id_tercero > tbl_terceros.id_tercero
+Ref: tbl_terceros_extension_proveedor.id_tipo_proveedor > cat_tipos_proveedor.id_tipo_proveedor
+Ref: tbl_terceros_extension_proveedor.id_condicion_pago > cat_condiciones_pago.id_condicion_pago

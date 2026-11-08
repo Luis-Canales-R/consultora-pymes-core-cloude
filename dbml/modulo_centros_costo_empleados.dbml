@@ -1,0 +1,29 @@
+// ==========================================
+// MÓDULO: CENTROS DE COSTO Y EMPLEADOS / USUARIOS
+// ==========================================
+
+// Centros de Costo (Alineado con taxonomía APQC para Control de Gestión)
+Table tbl_centros_costo {
+  id_centro_costo integer [primary key]
+  codigo_cc varchar(30) [unique, not null] // Ej: CC-FIN-01, CC-OPS-01
+  nombre_cc varchar(150) [not null]
+  nivel integer [not null]
+  id_centro_padre integer                 // Estructura jerárquica de áreas
+  es_activo boolean [default: true]
+}
+
+Ref: tbl_centros_costo.id_centro_padre > tbl_centros_costo.id_centro_costo
+
+// Empleados y Usuarios del Sistema (Trazabilidad y Roles)
+Table tbl_empleados_usuarios {
+  id_empleado integer [primary key]
+  rut_dni varchar(20) [unique, not null]
+  nombre_completo varchar(150) [not null]
+  cargo varchar(100)
+  correo_electronico varchar(100)
+  id_centro_costo integer [not null]      // Área a la que pertenece
+  es_activo boolean [default: true]
+  created_at timestamp
+}
+
+Ref: tbl_empleados_usuarios.id_centro_costo > tbl_centros_costo.id_centro_costo
