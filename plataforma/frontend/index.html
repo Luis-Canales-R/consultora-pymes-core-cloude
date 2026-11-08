@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Control de Gestión · Plataforma</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <h1>Control de<br>Gestión</h1>
+    <nav>
+      <button class="nav-btn active" data-view="dashboard">📊 Dashboard</button>
+      <button class="nav-btn" data-view="ventas">🧾 Ventas</button>
+      <button class="nav-btn" data-view="compras">📦 Compras y Gastos</button>
+      <button class="nav-btn" data-view="caja">💰 Caja</button>
+      <button class="nav-btn" data-view="catalogos">📇 Catálogos</button>
+    </nav>
+    <p class="sidebar-foot">MVP local · SQLite</p>
+  </aside>
+
+  <main class="content">
+
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view active">
+      <h2>Dashboard</h2>
+      <div class="cards">
+        <div class="card">
+          <span class="card-label">Ventas netas</span>
+          <span class="card-value" id="kpi-ventas">—</span>
+          <span class="card-sub" id="kpi-ventas-n">—</span>
+        </div>
+        <div class="card">
+          <span class="card-label">Compras y gastos netos</span>
+          <span class="card-value" id="kpi-compras">—</span>
+          <span class="card-sub" id="kpi-compras-n">—</span>
+        </div>
+        <div class="card" id="card-margen">
+          <span class="card-label">Margen bruto (ventas − compras)</span>
+          <span class="card-value" id="kpi-margen">—</span>
+        </div>
+        <div class="card" id="card-caja">
+          <span class="card-label">Saldo de caja</span>
+          <span class="card-value" id="kpi-caja">—</span>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>Ventas vs. Compras por mes</h3>
+        <table class="data-table" id="tabla-meses">
+          <thead><tr><th>Mes</th><th>Ventas (neto)</th><th>Compras (neto)</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- VENTAS -->
+    <section id="view-ventas" class="view">
+      <h2>Ventas Devengadas</h2>
+      <form id="form-venta" class="form-grid">
+        <label>Folio factura <input name="folio_factura" required></label>
+        <label>Cliente
+          <select name="id_tercero" required data-role="cliente"></select>
+        </label>
+        <label>Centro de costo
+          <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
+        </label>
+        <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
+        <label>Monto neto <input type="number" step="0.01" name="monto_neto" required></label>
+        <label>Estado
+          <select name="estado_venta">
+            <option value="DEVENGADO">Devengado</option>
+            <option value="FACTURADO">Facturado</option>
+            <option value="PAGADO">Pagado</option>
+          </select>
+        </label>
+        <button type="submit">Registrar venta</button>
+        <span class="form-msg" id="msg-venta"></span>
+      </form>
+      <table class="data-table" id="tabla-ventas">
+        <thead><tr><th>Folio</th><th>Cliente</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- COMPRAS -->
+    <section id="view-compras" class="view">
+      <h2>Compras y Gastos</h2>
+      <form id="form-compra" class="form-grid">
+        <label>Folio documento <input name="folio_documento" required></label>
+        <label>Proveedor
+          <select name="id_tercero" required data-role="proveedor"></select>
+        </label>
+        <label>Centro de costo
+          <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
+        </label>
+        <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
+        <label>Descripción <input name="descripcion" required></label>
+        <label>Monto neto <input type="number" step="0.01" name="monto_neto" required></label>
+        <button type="submit">Registrar compra/gasto</button>
+        <span class="form-msg" id="msg-compra"></span>
+      </form>
+      <table class="data-table" id="tabla-compras">
+        <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Descripción</th><th>Neto</th><th>IVA</th><th>Total</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- CAJA -->
+    <section id="view-caja" class="view">
+      <h2>Movimientos de Caja</h2>
+      <form id="form-caja" class="form-grid">
+        <label>Fecha <input type="date" name="fecha_movimiento" required></label>
+        <label>Tipo
+          <select name="tipo_flujo" required>
+            <option value="INGRESO">Ingreso</option>
+            <option value="EGRESO">Egreso</option>
+            <option value="TRASPASO_HASTA">Traspaso (hacia esta cuenta)</option>
+            <option value="TRASPASO_DESDE">Traspaso (desde esta cuenta)</option>
+          </select>
+        </label>
+        <label>Monto <input type="number" step="0.01" name="monto_absoluto" required></label>
+        <label>Glosa <input name="glosa_movimiento" required></label>
+        <label>Tercero (opcional)
+          <select name="id_tercero"><option value="">(ninguno)</option></select>
+        </label>
+        <label>Centro de costo
+          <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
+        </label>
+        <button type="submit">Registrar movimiento</button>
+        <span class="form-msg" id="msg-caja"></span>
+      </form>
+      <table class="data-table" id="tabla-caja">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Monto</th><th>Glosa</th><th>Tercero</th><th>Centro costo</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- CATALOGOS -->
+    <section id="view-catalogos" class="view">
+      <h2>Catálogos</h2>
+
+      <div class="panel">
+        <h3>Terceros (clientes / proveedores)</h3>
+        <form id="form-tercero" class="form-grid">
+          <label>Código <input name="codigo_tercero" required></label>
+          <label>Razón social <input name="razon_social" required></label>
+          <label>RUT/DNI <input name="rut_dni" required></label>
+          <label class="checkbox"><input type="checkbox" name="es_cliente"> Es cliente</label>
+          <label class="checkbox"><input type="checkbox" name="es_proveedor"> Es proveedor</label>
+          <label>Email <input type="email" name="contacto_email"></label>
+          <button type="submit">Agregar tercero</button>
+          <span class="form-msg" id="msg-tercero"></span>
+        </form>
+        <table class="data-table" id="tabla-terceros">
+          <thead><tr><th>Código</th><th>Razón social</th><th>RUT</th><th>Cliente</th><th>Proveedor</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h3>Productos / Servicios</h3>
+        <form id="form-producto" class="form-grid">
+          <label>SKU <input name="sku_codigo" required></label>
+          <label>Nombre <input name="nombre" required></label>
+          <label>Precio venta base <input type="number" step="0.01" name="precio_venta_base" required></label>
+          <label>Modo obtención
+            <select name="modo_obtencion">
+              <option value="">(sin clasificar)</option>
+              <option value="COMPRADO_REVENTA">Comprado / Reventa</option>
+              <option value="FABRICADO">Fabricado</option>
+              <option value="SERVICIO">Servicio</option>
+            </select>
+          </label>
+          <button type="submit">Agregar producto</button>
+          <span class="form-msg" id="msg-producto"></span>
+        </form>
+        <table class="data-table" id="tabla-productos">
+          <thead><tr><th>SKU</th><th>Nombre</th><th>Precio</th><th>Modo obtención</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h3>Centros de costo</h3>
+        <form id="form-centro" class="form-grid">
+          <label>Nombre <input name="nombre" required></label>
+          <button type="submit">Agregar centro de costo</button>
+          <span class="form-msg" id="msg-centro"></span>
+        </form>
+        <table class="data-table" id="tabla-centros">
+          <thead><tr><th>Nombre</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

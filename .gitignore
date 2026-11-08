@@ -11,3 +11,6 @@
 # OS
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
+plataforma/backend/plataforma.db
