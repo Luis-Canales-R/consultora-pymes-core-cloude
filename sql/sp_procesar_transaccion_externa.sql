@@ -83,6 +83,7 @@ BEGIN
     DECLARE @id_cuenta_costo_gasto_raw INT;  -- sin fallback aplicado (v6: SERVICIO usa fallback propio, 5113)
     DECLARE @costo_unitario_cpp DECIMAL(18,4);
     DECLARE @glosa_tmp VARCHAR(250);  -- buffer para armar glosas concatenadas antes de pasarlas a EXEC
+    DECLARE @periodo_tmp VARCHAR(7);  -- buffer para CONVERT(...) antes de pasarlo a EXEC
     DECLARE @mod_linea DECIMAL(18,2);
     DECLARE @mpd_linea DECIMAL(18,2);
     DECLARE @honorarios_linea DECIMAL(18,2);
@@ -311,11 +312,12 @@ BEGIN
             -- ELSE: ítem sin clasificar (modo_obtencion NULL) -> sin leg de costo
 
             SET @glosa_tmp = 'Devengamiento automático Venta ' + @folio_factura + ' (venta puntual)';
+            SET @periodo_tmp = CONVERT(VARCHAR(7), @fecha_emision, 23);
             EXEC dbo.sp_registrar_asiento_contable
                 @id_transaccion = NULL,
                 @fecha_asiento = @fecha_emision,
                 @glosa_general = @glosa_tmp,
-                @periodo_contable = CONVERT(VARCHAR(7), @fecha_emision, 23),
+                @periodo_contable = @periodo_tmp,
                 @lineas = @lineas_venta_externa,
                 @id_asiento_out = @id_asiento_generado OUTPUT;
 

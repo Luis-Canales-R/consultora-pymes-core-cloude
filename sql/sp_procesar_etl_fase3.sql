@@ -52,6 +52,7 @@ BEGIN
     SET NOCOUNT ON;
 
     DECLARE @glosa_tmp VARCHAR(250);  -- buffer para armar glosas concatenadas antes de pasarlas a EXEC
+    DECLARE @periodo_tmp VARCHAR(7);  -- buffer para CONVERT(...) antes de pasarlo a EXEC
 
     PRINT '------------------------------------------------';
     PRINT 'Iniciando validación ETL para el archivo: ' + @nombre_archivo;
@@ -570,11 +571,12 @@ BEGIN
                     VALUES (2141, 0.00, @v_monto_iva, NULL, 'IVA Débito Fiscal Venta ' + @folio_actual);
 
                 SET @glosa_tmp = 'Devengamiento automático Venta ' + @folio_actual + ' (ETL Fase 3)';
+                SET @periodo_tmp = CONVERT(VARCHAR(7), @v_fecha, 23);
                 EXEC dbo.sp_registrar_asiento_contable
                     @id_transaccion = NULL,
                     @fecha_asiento = @v_fecha,
                     @glosa_general = @glosa_tmp,
-                    @periodo_contable = CONVERT(VARCHAR(7), @v_fecha, 23),
+                    @periodo_contable = @periodo_tmp,
                     @lineas = @lineas_venta,
                     @id_asiento_out = @id_asiento_generado OUTPUT;
 
@@ -720,11 +722,12 @@ BEGIN
                 VALUES (2111, 0.00, @c_monto_total, NULL, 'Cuenta por pagar Compra ' + @folio_oc_actual);
 
                 SET @glosa_tmp = 'Devengamiento automático Compra ' + @folio_oc_actual + ' (ETL Fase 3)';
+                SET @periodo_tmp = CONVERT(VARCHAR(7), @c_fecha, 23);
                 EXEC dbo.sp_registrar_asiento_contable
                     @id_transaccion = NULL,
                     @fecha_asiento = @c_fecha,
                     @glosa_general = @glosa_tmp,
-                    @periodo_contable = CONVERT(VARCHAR(7), @c_fecha, 23),
+                    @periodo_contable = @periodo_tmp,
                     @lineas = @lineas_compra,
                     @id_asiento_out = @id_asiento_generado OUTPUT;
 
@@ -795,10 +798,11 @@ BEGIN
                     VALUES (CASE WHEN @m_tercero IS NOT NULL THEN 1121 ELSE 4113 END, 0.00, @m_monto, @m_cc, @m_glosa);
 
                     SET @glosa_tmp = 'Ingreso de caja automático (ETL Fase 3): ' + @m_glosa;
+                    SET @periodo_tmp = CONVERT(VARCHAR(7), @m_fecha, 23);
                     EXEC dbo.sp_registrar_asiento_contable
                         @id_transaccion = NULL, @fecha_asiento = @m_fecha,
                         @glosa_general = @glosa_tmp,
-                        @periodo_contable = CONVERT(VARCHAR(7), @m_fecha, 23),
+                        @periodo_contable = @periodo_tmp,
                         @lineas = @lineas_mov, @id_asiento_out = @id_asiento_generado OUTPUT;
                 END
                 ELSE IF @m_tipo_flujo = 'EGRESO'
@@ -808,10 +812,11 @@ BEGIN
                     INSERT INTO @lineas_mov (id_cuenta, debe, haber, id_centro_costo, glosa_detalle) VALUES (@m_cuenta, 0.00, @m_monto, @m_cc, @m_glosa);
 
                     SET @glosa_tmp = 'Egreso de caja automático (ETL Fase 3): ' + @m_glosa;
+                    SET @periodo_tmp = CONVERT(VARCHAR(7), @m_fecha, 23);
                     EXEC dbo.sp_registrar_asiento_contable
                         @id_transaccion = NULL, @fecha_asiento = @m_fecha,
                         @glosa_general = @glosa_tmp,
-                        @periodo_contable = CONVERT(VARCHAR(7), @m_fecha, 23),
+                        @periodo_contable = @periodo_tmp,
                         @lineas = @lineas_mov, @id_asiento_out = @id_asiento_generado OUTPUT;
                 END
                 -- TRASPASO_HASTA / TRASPASO_DESDE: se emparejan aparte, ver 4.3c (v11).
@@ -887,10 +892,11 @@ BEGIN
                 VALUES (@t_cuenta_desde, 0.00, @t_monto, @t_cc_desde, @t_glosa);
 
                 SET @glosa_tmp = 'Traspaso de caja automático (ETL Fase 3): ' + @t_glosa;
+                SET @periodo_tmp = CONVERT(VARCHAR(7), @t_fecha, 23);
                 EXEC dbo.sp_registrar_asiento_contable
                     @id_transaccion = NULL, @fecha_asiento = @t_fecha,
                     @glosa_general = @glosa_tmp,
-                    @periodo_contable = CONVERT(VARCHAR(7), @t_fecha, 23),
+                    @periodo_contable = @periodo_tmp,
                     @lineas = @lineas_traspaso, @id_asiento_out = @id_asiento_generado OUTPUT;
 
                 FETCH NEXT FROM cur_traspasos INTO @td_id, @th_id;
