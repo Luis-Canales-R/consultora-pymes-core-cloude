@@ -82,6 +82,7 @@ BEGIN
     DECLARE @id_cuenta_costo_gasto INT;
     DECLARE @id_cuenta_costo_gasto_raw INT;  -- sin fallback aplicado (v6: SERVICIO usa fallback propio, 5113)
     DECLARE @costo_unitario_cpp DECIMAL(18,4);
+    DECLARE @glosa_tmp VARCHAR(250);  -- buffer para armar glosas concatenadas antes de pasarlas a EXEC
     DECLARE @mod_linea DECIMAL(18,2);
     DECLARE @mpd_linea DECIMAL(18,2);
     DECLARE @honorarios_linea DECIMAL(18,2);
@@ -187,13 +188,14 @@ BEGIN
             -- v4 (Costeo Directo por Flujo de Venta): leg de costo directo
             IF @modo_obtencion = 'COMPRADO_REVENTA'
             BEGIN
+                SET @glosa_tmp = 'Salida por Venta ' + @folio_factura;
                 EXEC dbo.sp_registrar_movimiento_inventario
                     @id_item = @id_item_oficial,
                     @tipo_movimiento = 'SALIDA',
                     @cantidad = @cantidad,
                     @origen_documento = 'VENTA',
                     @id_referencia = @id_venta_devengada,
-                    @glosa = 'Salida por Venta ' + @folio_factura,
+                    @glosa = @glosa_tmp,
                     @costo_unitario_resultante = @costo_unitario_cpp OUTPUT;
 
                 IF @costo_unitario_cpp > 0
@@ -225,13 +227,14 @@ BEGIN
                 FETCH NEXT FROM cur_mpd_fabricado INTO @ins_id_insumo, @ins_cantidad_total;
                 WHILE @@FETCH_STATUS = 0
                 BEGIN
+                    SET @glosa_tmp = 'Consumo de insumo (BOM) por Venta ' + @folio_factura;
                     EXEC dbo.sp_registrar_movimiento_inventario
                         @id_insumo = @ins_id_insumo,
                         @tipo_movimiento = 'SALIDA',
                         @cantidad = @ins_cantidad_total,
                         @origen_documento = 'VENTA',
                         @id_referencia = @id_venta_devengada,
-                        @glosa = 'Consumo de insumo (BOM) por Venta ' + @folio_factura,
+                        @glosa = @glosa_tmp,
                         @costo_unitario_resultante = @ins_cpp_salida OUTPUT;
 
                     IF @ins_cpp_salida > 0
@@ -275,13 +278,14 @@ BEGIN
                 FETCH NEXT FROM cur_insumos_servicio INTO @ins_id_insumo, @ins_cantidad_total;
                 WHILE @@FETCH_STATUS = 0
                 BEGIN
+                    SET @glosa_tmp = 'Consumo de insumo (BOM) por Venta ' + @folio_factura;
                     EXEC dbo.sp_registrar_movimiento_inventario
                         @id_insumo = @ins_id_insumo,
                         @tipo_movimiento = 'SALIDA',
                         @cantidad = @ins_cantidad_total,
                         @origen_documento = 'VENTA',
                         @id_referencia = @id_venta_devengada,
-                        @glosa = 'Consumo de insumo (BOM) por Venta ' + @folio_factura,
+                        @glosa = @glosa_tmp,
                         @costo_unitario_resultante = @ins_cpp_salida OUTPUT;
 
                     IF @ins_cpp_salida > 0
@@ -306,10 +310,11 @@ BEGIN
             END
             -- ELSE: ítem sin clasificar (modo_obtencion NULL) -> sin leg de costo
 
+            SET @glosa_tmp = 'Devengamiento automático Venta ' + @folio_factura + ' (venta puntual)';
             EXEC dbo.sp_registrar_asiento_contable
                 @id_transaccion = NULL,
                 @fecha_asiento = @fecha_emision,
-                @glosa_general = 'Devengamiento automático Venta ' + @folio_factura + ' (venta puntual)',
+                @glosa_general = @glosa_tmp,
                 @periodo_contable = CONVERT(VARCHAR(7), @fecha_emision, 23),
                 @lineas = @lineas_venta_externa,
                 @id_asiento_out = @id_asiento_generado OUTPUT;

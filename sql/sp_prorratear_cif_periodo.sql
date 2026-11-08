@@ -159,6 +159,7 @@ BEGIN
                             DECLARE @id_cuenta_costo_item INT = ISNULL((SELECT id_cuenta_costo_gasto FROM dbo.tbl_productos_servicios WHERE id_item = @item_id), 6215);
                             DECLARE @lineas_cif dbo.tipo_asiento_detalle;
                             DECLARE @id_asiento_cif INT;
+                            DECLARE @glosa_cif VARCHAR(250);
 
                             INSERT INTO @lineas_cif (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
                             VALUES (@id_cuenta_costo_item, @monto_cif_linea, 0.00, @cc_actual, 'CIF prorrateado Venta ' + @folio);
@@ -166,10 +167,12 @@ BEGIN
                             INSERT INTO @lineas_cif (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
                             VALUES (@id_cuenta_cif_absorbido, 0.00, @monto_cif_linea, @cc_actual, 'CIF absorbido Venta ' + @folio);
 
+                            SET @glosa_cif = 'Absorción CIF periodo ' + @periodo_contable + ' - Venta ' + @folio;
+
                             EXEC dbo.sp_registrar_asiento_contable
                                 @id_transaccion = NULL,
                                 @fecha_asiento = @fecha,
-                                @glosa_general = 'Absorción CIF periodo ' + @periodo_contable + ' - Venta ' + @folio,
+                                @glosa_general = @glosa_cif,
                                 @periodo_contable = @periodo_contable,
                                 @lineas = @lineas_cif,
                                 @id_asiento_out = @id_asiento_cif OUTPUT;

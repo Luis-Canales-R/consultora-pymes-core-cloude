@@ -114,3 +114,21 @@ CREATE TABLE tbl_terceros_extension_proveedor (
     CONSTRAINT fk_ext_prov_pago FOREIGN KEY (id_condicion_pago) REFERENCES cat_condiciones_pago(id_condicion_pago)
 );
 GO
+
+-- ==========================================
+-- 5. DATOS BASE (catálogos minimos + un tercero de ejemplo)
+-- Necesarios porque el modulo de Contabilidad/Transacciones trae una
+-- demostracion (Factura F-1001, id_tercero = 1) que requiere que este
+-- tercero exista. Sin estos datos, esa demostracion falla con error
+-- de llave foranea (FK) porque id_tercero 1 no existe en la tabla.
+-- ==========================================
+INSERT INTO cat_paises (id_pais, codigo_iso, nombre_pais) VALUES
+(1, 'CHL', 'Chile');
+
+INSERT INTO cat_tipos_persona (id_tipo_persona, codigo, nombre) VALUES
+(1, 'JURIDICA', 'Persona Juridica'),
+(2, 'NATURAL', 'Persona Natural');
+
+INSERT INTO tbl_terceros (id_tercero, codigo_tercero, id_tipo_persona, razon_social, rut_dni, id_pais)
+VALUES (1, 'CLI-0001', 1, 'Cliente Demo S.A.', '76.000.000-0', 1);
+GO

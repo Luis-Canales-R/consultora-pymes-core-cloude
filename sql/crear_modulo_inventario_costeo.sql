@@ -85,6 +85,7 @@ CREATE PROCEDURE dbo.sp_registrar_movimiento_inventario
 AS
 BEGIN
     SET NOCOUNT ON;
+    DECLARE @saldo_str VARCHAR(30), @cantidad_str VARCHAR(30);  -- buffer para armar el mensaje de error sin concatenar todo en una sola línea
     BEGIN TRY
         IF (@id_item IS NULL AND @id_insumo IS NULL) OR (@id_item IS NOT NULL AND @id_insumo IS NOT NULL)
         BEGIN
@@ -126,7 +127,9 @@ BEGIN
         BEGIN
             IF @saldo_cantidad_actual < @cantidad
             BEGIN
-                RAISERROR('sp_registrar_movimiento_inventario: stock insuficiente (saldo actual %s, solicitado %s). Revise las ENTRADAs registradas para este ítem/insumo.', 16, 1, CAST(@saldo_cantidad_actual AS VARCHAR(30)), CAST(@cantidad AS VARCHAR(30)));
+                SET @saldo_str = CAST(@saldo_cantidad_actual AS VARCHAR(30));
+                SET @cantidad_str = CAST(@cantidad AS VARCHAR(30));
+                RAISERROR('sp_registrar_movimiento_inventario: stock insuficiente (saldo actual %s, solicitado %s). Revise las ENTRADAs registradas para este item/insumo.', 16, 1, @saldo_str, @cantidad_str);
                 RETURN;
             END
 
