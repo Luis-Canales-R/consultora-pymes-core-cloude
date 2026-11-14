@@ -88,11 +88,13 @@ function initNav() {
 
 let CACHE_TERCEROS = [];
 let CACHE_CENTROS = [];
+let CACHE_PRODUCTOS = [];
 
 async function refreshCatalogCaches() {
-  [CACHE_TERCEROS, CACHE_CENTROS] = await Promise.all([
+  [CACHE_TERCEROS, CACHE_CENTROS, CACHE_PRODUCTOS] = await Promise.all([
     apiGet("/terceros"),
     apiGet("/centros_costo"),
+    apiGet("/productos"),
   ]);
 }
 
@@ -141,11 +143,28 @@ function fillCentroSelects() {
   });
 }
 
+function fillProductoSelects() {
+  document.querySelectorAll('select[name="id_item"]').forEach((sel) => {
+    const current = sel.value;
+    const placeholder = sel.querySelector('option[value=""]');
+    sel.innerHTML = "";
+    if (placeholder) sel.appendChild(placeholder);
+    CACHE_PRODUCTOS.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.id_item;
+      o.textContent = `${p.nombre} (${p.sku_codigo})`;
+      sel.appendChild(o);
+    });
+    if (current) sel.value = current;
+  });
+}
+
 async function refreshAllSelects() {
   await refreshCatalogCaches();
   fillTerceroSelects("cliente");
   fillTerceroSelects("proveedor");
   fillCentroSelects();
+  fillProductoSelects();
 }
 
 // ---------------------------------------------------------------------------

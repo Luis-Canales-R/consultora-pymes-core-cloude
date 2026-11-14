@@ -39,23 +39,55 @@ Probado de punta a punta en modo SQLite: todos los endpoints (catálogos,
 ventas, compras, caja, dashboard), cálculo automático de IVA, validación de
 campos requeridos y manejo de errores (duplicados, campos faltantes).
 
-## Modo producción (SQL Server real) — pendiente
+## Modo producción (SQL Server real)
 
-`db.py` ya soporta `DB_ENGINE=mssql` con autenticación de Windows (igual
-que `sqlcmd -E`, sin pedir usuario/clave), apuntando por defecto a
-`.\SQLEXPRESS` / `consultora_pymes_core`. **Pero el esquema real (carpeta
-`/sql` del proyecto) es más rico que el esquema simplificado de este MVP**:
+**Catálogos (Terceros, Productos, Centros de costo) y Ventas ya están
+adaptados al esquema real.** Faltan Compras y Caja (siguen apuntando al
+esquema simplificado) — próximo paso.
 
-- Cliente/Proveedor en el esquema real es una tabla de roles N:M
-  (`rel_terceros_roles` + `cat_roles`), no un par de columnas booleanas.
-- Compras tiene cabecera (`tbl_ordenes_compra`) + detalle
-  (`tbl_compras_detalle`, por ítem o insumo), no una tabla plana.
-- Para mantener la contabilidad de partida doble correcta, registrar una
-  venta o compra debería invocar los stored procedures reales
-  (`sp_procesar_venta_externa`, etc.) en vez de un INSERT directo.
+### Requisitos antes de usarlo
 
-Conectar esta app tal cual contra las tablas reales daría datos
-incompletos. Antes de usar `DB_ENGINE=mssql` en producción, falta adaptar
-las consultas de `app.py` al esquema real (o exponerlas a través de vistas
-de compatibilidad / los stored procedures existentes). Ese trabajo no
-alcanzó a hacerse en este MVP — queda como siguiente paso.
+1. El esquema real desplegado (carpeta `/sql`) **más**
+   `sql/crear_catalogos_base.sql` (roles, tipo de ítem, unidad de medida,
+   categoría — sin esto no se puede registrar ni un tercero ni un producto).
+2. `pip install pyodbc` en la máquina donde corre la plataforma (no viene
+   con Python; hay que instalarlo aparte).
+3. El "ODBC Driver 18 for SQL Server" instalado en Windows (normalmente ya
+   viene si instalaste SSMS; si no, se descarga de Microsoft).
+
+### Cómo correrla contra SQL Server real
+
+```powershell
+$env:DB_ENGINE = "mssql"
+cd plataforma\backend
+python app.py
+```
+
+Por defecto apunta a `.\SQLEXPRESS` / `consultora_pymes_core` con
+autenticación de Windows (igual que `sqlcmd -E`, sin pedir usuario ni
+clave). Para apuntar a otra instancia o base, definir también
+`MSSQL_SERVER` / `MSSQL_DATABASE` antes de `python app.py`.
+
+### Cómo funciona por dentro
+
+Para mantener la contabilidad de partida doble correcta (y no duplicar esa
+lógica, bastante compleja, en Python), **Ventas no hace INSERT directo**:
+invoca el stored procedure real `sp_procesar_venta_externa`, que genera el
+asiento contable automáticamente según el tipo de ítem vendido.
+
+Ese procedure fue diseñado para el flujo de importación desde Excel, y
+resuelve el cliente/producto por *nombre* a través de tablas de
+homologación (`map_clientes`, `map_productos`) en vez de por ID. Para que
+funcione también desde esta plataforma, al crear un Cliente o un Producto
+se agrega automáticamente una fila de homologación "1:1" (el nombre real
+apunta a sí mismo), así la venta pasa por el mismo camino ya probado.
+
+### Pendiente
+
+- Compras y Caja: aún no adaptados (siguen con el esquema simplificado).
+- El Dashboard sigue calculando sus totales directo sobre las tablas
+  operativas; falta conectarlo a `vw_balance_general` / `vw_estado_resultados`
+  para mostrar el Balance General y Estado de Resultados reales.
+- No se pudo probar `DB_ENGINE=mssql` end-to-end en el entorno de
+  desarrollo (sin pyodbc ni acceso al SQL Server del usuario) — probar en
+  la máquina real y reportar cualquier error para corregirlo.

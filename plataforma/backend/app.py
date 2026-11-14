@@ -63,14 +63,35 @@ def require_fields(payload, fields):
 # Catálogos: terceros, productos/servicios, centros de costo
 # ---------------------------------------------------------------------------
 
+ROL_CLIENTE = 1
+ROL_PROVEEDOR = 2
+
+
 @app.route("/api/terceros", methods=["GET"])
 def listar_terceros():
     conn = db.get_conn()
-    rows = conn.execute(
-        "SELECT * FROM tbl_terceros WHERE estado_activo = 1 ORDER BY razon_social"
-    ).fetchall()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT t.id_tercero, t.codigo_tercero, t.razon_social, t.rut_dni,
+                      t.contacto_email, t.estado_activo,
+                      CASE WHEN EXISTS (SELECT 1 FROM rel_terceros_roles r
+                                        WHERE r.id_tercero = t.id_tercero AND r.id_rol = ?)
+                           THEN 1 ELSE 0 END AS es_cliente,
+                      CASE WHEN EXISTS (SELECT 1 FROM rel_terceros_roles r
+                                        WHERE r.id_tercero = t.id_tercero AND r.id_rol = ?)
+                           THEN 1 ELSE 0 END AS es_proveedor
+               FROM tbl_terceros t
+               WHERE t.estado_activo = 1
+               ORDER BY t.razon_social""",
+            (ROL_CLIENTE, ROL_PROVEEDOR),
+        )
+    else:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM tbl_terceros WHERE estado_activo = 1 ORDER BY razon_social"
+        ).fetchall())
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(rows)
 
 
 @app.route("/api/terceros", methods=["POST"])
@@ -80,6 +101,41 @@ def crear_tercero():
     if missing:
         return error(missing)
     conn = db.get_conn()
+
+    if db.DB_ENGINE == "mssql":
+        try:
+            new_id = db.next_id(conn, "tbl_terceros", "id_tercero")
+            conn.execute(
+                """INSERT INTO tbl_terceros
+                   (id_tercero, codigo_tercero, id_tipo_persona, razon_social, rut_dni, id_pais, contacto_email)
+                   VALUES (?, ?, 1, ?, ?, 1, ?)""",
+                (new_id, payload["codigo_tercero"], payload["razon_social"],
+                 payload["rut_dni"], payload.get("contacto_email")),
+            )
+            if payload.get("es_cliente"):
+                conn.execute(
+                    "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
+                    (new_id, ROL_CLIENTE),
+                )
+                # Homologación 1:1 (nombre real -> sí mismo) para que
+                # sp_procesar_venta_externa pueda resolverlo directo.
+                conn.execute(
+                    "INSERT INTO map_clientes (nombre_informal_excel, id_tercero_oficial) VALUES (?, ?)",
+                    (payload["razon_social"], new_id),
+                )
+            if payload.get("es_proveedor"):
+                conn.execute(
+                    "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
+                    (new_id, ROL_PROVEEDOR),
+                )
+            conn.commit()
+        except Exception as exc:  # pyodbc.Error también cubierto por Exception
+            conn.rollback()
+            conn.close()
+            return error(f"No se pudo crear el tercero: {exc}")
+        conn.close()
+        return jsonify({"id_tercero": new_id}), 201
+
     try:
         cur = conn.execute(
             """INSERT INTO tbl_terceros
@@ -106,11 +162,25 @@ def crear_tercero():
 @app.route("/api/productos", methods=["GET"])
 def listar_productos():
     conn = db.get_conn()
-    rows = conn.execute(
-        "SELECT * FROM tbl_productos_servicios WHERE estado_activo = 1 ORDER BY nombre"
-    ).fetchall()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT p.id_item, p.sku_codigo, p.nombre, p.precio_venta_base,
+                      p.modo_obtencion, p.aplica_iva, p.estado_activo,
+                      ti.nombre AS tipo_item, ci.nombre AS categoria, um.nombre AS unidad_medida
+               FROM tbl_productos_servicios p
+               JOIN cat_tipos_item ti ON ti.id_tipo_item = p.id_tipo_item
+               JOIN cat_categorias_item ci ON ci.id_categoria_item = p.id_categoria_item
+               JOIN cat_unidades_medida um ON um.id_unidad_medida = p.id_unidad_medida
+               WHERE p.estado_activo = 1
+               ORDER BY p.nombre""",
+        )
+    else:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM tbl_productos_servicios WHERE estado_activo = 1 ORDER BY nombre"
+        ).fetchall())
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(rows)
 
 
 @app.route("/api/productos", methods=["POST"])
@@ -120,6 +190,33 @@ def crear_producto():
     if missing:
         return error(missing)
     conn = db.get_conn()
+
+    if db.DB_ENGINE == "mssql":
+        modo = payload.get("modo_obtencion") or None
+        id_tipo_item = 2 if modo == "SERVICIO" else 1  # 1=PRODUCTO, 2=SERVICIO (cat_tipos_item)
+        try:
+            new_id = db.next_id(conn, "tbl_productos_servicios", "id_item")
+            conn.execute(
+                """INSERT INTO tbl_productos_servicios
+                   (id_item, sku_codigo, nombre, id_tipo_item, id_categoria_item,
+                    id_unidad_medida, precio_venta_base, modo_obtencion)
+                   VALUES (?, ?, ?, ?, 1, 1, ?, ?)""",
+                (new_id, payload["sku_codigo"], payload["nombre"], id_tipo_item,
+                 payload["precio_venta_base"], modo),
+            )
+            # Homologación 1:1 para que sp_procesar_venta_externa lo resuelva directo.
+            conn.execute(
+                "INSERT INTO map_productos (descripcion_libre_excel, id_item_oficial) VALUES (?, ?)",
+                (payload["nombre"], new_id),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            return error(f"No se pudo crear el producto: {exc}")
+        conn.close()
+        return jsonify({"id_item": new_id}), 201
+
     try:
         cur = conn.execute(
             """INSERT INTO tbl_productos_servicios
@@ -144,9 +241,16 @@ def crear_producto():
 @app.route("/api/centros_costo", methods=["GET"])
 def listar_centros_costo():
     conn = db.get_conn()
-    rows = conn.execute("SELECT * FROM tbl_centros_costo ORDER BY nombre").fetchall()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT id_centro_costo, codigo_cc, nombre_cc AS nombre
+               FROM tbl_centros_costo WHERE es_activo = 1 ORDER BY nombre_cc""",
+        )
+    else:
+        rows = rows_to_dicts(conn.execute("SELECT * FROM tbl_centros_costo ORDER BY nombre").fetchall())
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(rows)
 
 
 @app.route("/api/centros_costo", methods=["POST"])
@@ -156,6 +260,24 @@ def crear_centro_costo():
     if missing:
         return error(missing)
     conn = db.get_conn()
+
+    if db.DB_ENGINE == "mssql":
+        try:
+            new_id = db.next_id(conn, "tbl_centros_costo", "id_centro_costo")
+            codigo_cc = payload.get("codigo_cc") or f"CC-{new_id:03d}"
+            conn.execute(
+                """INSERT INTO tbl_centros_costo (id_centro_costo, codigo_cc, nombre_cc, nivel)
+                   VALUES (?, ?, ?, 1)""",
+                (new_id, codigo_cc, payload["nombre"]),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            return error(f"No se pudo crear el centro de costo: {exc}")
+        conn.close()
+        return jsonify({"id_centro_costo": new_id}), 201
+
     try:
         cur = conn.execute(
             "INSERT INTO tbl_centros_costo (nombre) VALUES (?)", (payload["nombre"],)
@@ -176,21 +298,81 @@ def crear_centro_costo():
 @app.route("/api/ventas", methods=["GET"])
 def listar_ventas():
     conn = db.get_conn()
-    rows = conn.execute(
-        """SELECT v.*, t.razon_social AS cliente, c.nombre AS centro_costo
-           FROM tbl_ventas_devengadas v
-           JOIN tbl_terceros t ON t.id_tercero = v.id_tercero
-           LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = v.id_centro_costo
-           ORDER BY v.fecha_emision DESC, v.id_venta_devengada DESC
-           LIMIT 200"""
-    ).fetchall()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT TOP 200 v.*, t.razon_social AS cliente, c.nombre_cc AS centro_costo
+               FROM tbl_ventas_devengadas v
+               JOIN tbl_terceros t ON t.id_tercero = v.id_tercero
+               LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = v.id_centro_costo
+               ORDER BY v.fecha_emision DESC, v.id_venta_devengada DESC""",
+        )
+    else:
+        rows = rows_to_dicts(conn.execute(
+            """SELECT v.*, t.razon_social AS cliente, c.nombre AS centro_costo
+               FROM tbl_ventas_devengadas v
+               JOIN tbl_terceros t ON t.id_tercero = v.id_tercero
+               LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = v.id_centro_costo
+               ORDER BY v.fecha_emision DESC, v.id_venta_devengada DESC
+               LIMIT 200"""
+        ).fetchall())
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return jsonify(rows)
 
 
 @app.route("/api/ventas", methods=["POST"])
 def crear_venta():
     payload = request.get_json(force=True)
+
+    if db.DB_ENGINE == "mssql":
+        # En el esquema real toda venta es de un ítem/servicio concreto
+        # (se la pasa a sp_procesar_venta_externa, que calcula neto/IVA/
+        # total y genera el asiento contable correcto según el ítem).
+        missing = require_fields(
+            payload, ["folio_factura", "id_tercero", "id_item", "fecha_emision", "monto_neto"]
+        )
+        if missing:
+            return error(missing)
+        conn = db.get_conn()
+        try:
+            cliente = db.fetch_one_dict(
+                conn, "SELECT razon_social FROM tbl_terceros WHERE id_tercero = ?", (payload["id_tercero"],)
+            )
+            producto = db.fetch_one_dict(
+                conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (payload["id_item"],)
+            )
+            if not cliente:
+                return error("Cliente no encontrado.")
+            if not producto:
+                return error("Producto/servicio no encontrado.")
+
+            conn.execute(
+                """EXEC dbo.sp_procesar_venta_externa
+                       @folio_factura = ?, @fecha_emision = ?,
+                       @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
+                       @cantidad = 1, @precio_unitario = ?,
+                       @estado_venta = ?, @id_centro_costo = ?""",
+                (
+                    payload["folio_factura"], payload["fecha_emision"],
+                    cliente["razon_social"], producto["nombre"],
+                    float(payload["monto_neto"]),
+                    payload.get("estado_venta", "DEVENGADO"),
+                    payload.get("id_centro_costo"),
+                ),
+            )
+            conn.commit()
+            resultado = db.fetch_one_dict(
+                conn,
+                "SELECT id_venta_devengada, monto_iva, monto_total FROM tbl_ventas_devengadas WHERE folio_factura = ?",
+                (payload["folio_factura"],),
+            )
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            return error(f"No se pudo registrar la venta: {exc}")
+        conn.close()
+        return jsonify(resultado), 201
+
     missing = require_fields(payload, ["folio_factura", "id_tercero", "fecha_emision", "monto_neto"])
     if missing:
         return error(missing)

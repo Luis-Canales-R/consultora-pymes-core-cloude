@@ -10,7 +10,7 @@ Dos backends, elegidos por la variable de entorno DB_ENGINE:
 
   DB_ENGINE=mssql
       Pensado para apuntar al SQL Server real del usuario (instancia local
-      .\SQLEXPRESS, carpeta /sql del proyecto). Requiere pyodbc instalado
+      .\\SQLEXPRESS, carpeta /sql del proyecto). Requiere pyodbc instalado
       (pip install pyodbc) y la variable MSSQL_DATABASE (por defecto
       'consultora_pymes_core'). Usa autenticación de Windows (Trusted
       Connection) por default, igual que `sqlcmd -E` -- NO pide usuario
@@ -18,20 +18,17 @@ Dos backends, elegidos por la variable de entorno DB_ENGINE:
       Si en el futuro se usa un SQL Server con login SQL (usuario/clave),
       definir MSSQL_USER y MSSQL_PASSWORD activa ese modo automáticamente.
 
-      IMPORTANTE -- este modo todavía NO se puede usar "tal cual": el
-      esquema real (carpeta /sql) es más rico que el esquema simplificado
-      de este MVP (por ejemplo, cliente/proveedor es una tabla de roles
-      N:M -- rel_terceros_roles -- no un par de columnas booleanas; y
-      compras tiene cabecera tbl_ordenes_compra + detalle tbl_compras_
-      detalle, no una tabla plana). Conectar esta app directo a las tablas
-      reales sin adaptar las consultas de app.py (o sin usar los stored
-      procedures reales como sp_procesar_venta_externa para mantener la
-      contabilidad de partida doble correcta) daría datos incompletos o
-      incorrectos. Antes de usar DB_ENGINE=mssql en producción falta ese
-      trabajo de adaptación -- no fue parte de este MVP.
+      Catálogos (terceros/productos/centros_costo) y Ventas ya están
+      adaptados al esquema real: ventas se registra invocando el stored
+      procedure sp_procesar_venta_externa (mantiene la contabilidad de
+      partida doble correcta), y terceros/productos se registran también
+      en las tablas de homologación (map_clientes / map_productos) que ese
+      procedure usa internamente -- ver app.py. Compras y Caja TODAVÍA no
+      están adaptados (siguen apuntando al esquema simplificado) -- queda
+      como siguiente paso.
 
-Todas las consultas de app.py usan SQL estándar (sin funciones específicas
-de un motor) para que esa futura adaptación sea lo más simple posible.
+Todas las consultas de app.py usan marcador de posición "?" (estilo
+sqlite3 / pyodbc), para que el cambio de motor sea lo más simple posible.
 """
 
 import os
@@ -75,6 +72,27 @@ def get_conn():
         return pyodbc.connect(conn_str)
 
     raise ValueError(f"DB_ENGINE desconocido: {DB_ENGINE!r} (use 'sqlite' o 'mssql')")
+
+
+def fetch_dicts(conn, sql, params=()):
+    """SELECT que devuelve una lista de dicts, igual en sqlite y mssql
+    (pyodbc no tiene row_factory; sqlite3.Row sí, pero normalizamos acá)."""
+    cur = conn.execute(sql, params)
+    cols = [c[0] for c in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def fetch_one_dict(conn, sql, params=()):
+    rows = fetch_dicts(conn, sql, params)
+    return rows[0] if rows else None
+
+
+def next_id(conn, table, pk_col):
+    """Genera el próximo ID para tablas del esquema real que usan PK manual
+    (INT PRIMARY KEY, sin IDENTITY) -- mismo patrón MAX+1 que usan los
+    scripts de /sql. Solo se usa en modo mssql."""
+    row = conn.execute(f"SELECT ISNULL(MAX({pk_col}), 0) + 1 FROM {table}").fetchone()
+    return row[0]
 
 
 def init_db():
