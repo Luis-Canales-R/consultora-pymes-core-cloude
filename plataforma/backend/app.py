@@ -206,16 +206,19 @@ def crear_producto():
     if db.DB_ENGINE == "mssql":
         modo = payload.get("modo_obtencion") or None
         id_tipo_item = 2 if modo == "SERVICIO" else 1  # 1=PRODUCTO, 2=SERVICIO (cat_tipos_item)
+        # aplica_iva: por defecto afecto (1); se puede marcar exento desde el
+        # formulario (payload["aplica_iva"] == False -> venta exenta de IVA).
+        aplica_iva = 0 if payload.get("aplica_iva") is False else 1
         try:
             new_id = db.next_id(conn, "tbl_productos_servicios", "id_item")
             sku_codigo = payload.get("sku_codigo") or f"SKU-{new_id:04d}"
             conn.execute(
                 """INSERT INTO tbl_productos_servicios
                    (id_item, sku_codigo, nombre, id_tipo_item, id_categoria_item,
-                    id_unidad_medida, precio_venta_base, modo_obtencion)
-                   VALUES (?, ?, ?, ?, 1, 1, ?, ?)""",
+                    id_unidad_medida, precio_venta_base, aplica_iva, modo_obtencion)
+                   VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)""",
                 (new_id, sku_codigo, payload["nombre"], id_tipo_item,
-                 payload["precio_venta_base"], modo),
+                 payload["precio_venta_base"], aplica_iva, modo),
             )
             # Homologación 1:1 para que sp_procesar_venta_externa lo resuelva directo.
             conn.execute(

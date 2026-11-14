@@ -359,7 +359,8 @@ async function loadCatalogos() {
       <td>${p.sku_codigo}</td>
       <td>${p.nombre}</td>
       <td>${fmtMoney(p.precio_venta_base)}</td>
-      <td>${p.modo_obtencion || "(sin clasificar)"}</td>`;
+      <td>${p.modo_obtencion || "(sin clasificar)"}</td>
+      <td>${p.aplica_iva === false || p.aplica_iva === 0 ? "Exento" : "Afecto"}</td>`;
     tProductos.appendChild(tr);
   });
 
