@@ -122,16 +122,19 @@ def crear_tercero():
                     "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
                     (new_id, ROL_CLIENTE),
                 )
-                # Homologación 1:1 (nombre real -> sí mismo) para que
-                # sp_procesar_venta_externa pueda resolverlo directo.
-                conn.execute(
-                    "INSERT INTO map_clientes (nombre_informal_excel, id_tercero_oficial) VALUES (?, ?)",
-                    (payload["razon_social"], new_id),
-                )
             if payload.get("es_proveedor"):
                 conn.execute(
                     "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
                     (new_id, ROL_PROVEEDOR),
+                )
+            if payload.get("es_cliente") or payload.get("es_proveedor"):
+                # Homologación 1:1 (nombre real -> sí mismo), UNA sola vez
+                # por tercero (nombre_informal_excel es UNIQUE en map_clientes),
+                # para que sp_procesar_venta_externa y sp_procesar_compra_externa
+                # puedan resolverlo directo sea cliente, proveedor, o ambos.
+                conn.execute(
+                    "INSERT INTO map_clientes (nombre_informal_excel, id_tercero_oficial) VALUES (?, ?)",
+                    (payload["razon_social"], new_id),
                 )
             conn.commit()
         except Exception as exc:  # pyodbc.Error también cubierto por Exception
@@ -435,6 +438,18 @@ def crear_venta():
 @app.route("/api/compras", methods=["GET"])
 def listar_compras():
     conn = db.get_conn()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT TOP 200 oc.*, t.razon_social AS proveedor, cc.nombre_cc AS centro_costo
+               FROM tbl_ordenes_compra oc
+               JOIN tbl_terceros t ON t.id_tercero = oc.id_tercero
+               LEFT JOIN tbl_centros_costo cc ON cc.id_centro_costo = oc.id_centro_costo
+               ORDER BY oc.fecha_emision DESC, oc.id_orden_compra DESC""",
+        )
+        conn.close()
+        return jsonify(rows)
+
     rows = conn.execute(
         """SELECT c.*, t.razon_social AS proveedor, cc.nombre AS centro_costo
            FROM tbl_compras_gastos c
@@ -450,6 +465,57 @@ def listar_compras():
 @app.route("/api/compras", methods=["POST"])
 def crear_compra():
     payload = request.get_json(force=True)
+
+    if db.DB_ENGINE == "mssql":
+        # En el esquema real toda compra es de un ítem concreto del
+        # catálogo (se le pasa a sp_procesar_compra_externa, que calcula
+        # neto/IVA/total, mueve el kardex si corresponde y genera el
+        # asiento contable correcto según el ítem).
+        missing = require_fields(
+            payload, ["folio_oc", "id_tercero", "id_item", "fecha_emision", "monto_neto"]
+        )
+        if missing:
+            return error(missing)
+        conn = db.get_conn()
+        try:
+            proveedor = db.fetch_one_dict(
+                conn, "SELECT razon_social FROM tbl_terceros WHERE id_tercero = ?", (payload["id_tercero"],)
+            )
+            producto = db.fetch_one_dict(
+                conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (payload["id_item"],)
+            )
+            if not proveedor:
+                return error("Proveedor no encontrado.")
+            if not producto:
+                return error("Producto/servicio no encontrado.")
+
+            conn.execute(
+                """EXEC dbo.sp_procesar_compra_externa
+                       @folio_oc = ?, @fecha_emision = ?,
+                       @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
+                       @cantidad = 1, @precio_unitario = ?,
+                       @estado_oc = ?, @id_centro_costo = ?""",
+                (
+                    payload["folio_oc"], payload["fecha_emision"],
+                    proveedor["razon_social"], producto["nombre"],
+                    float(payload["monto_neto"]),
+                    payload.get("estado_oc", "RECIBIDA"),
+                    payload.get("id_centro_costo"),
+                ),
+            )
+            conn.commit()
+            resultado = db.fetch_one_dict(
+                conn,
+                "SELECT id_orden_compra, monto_iva, monto_total FROM tbl_ordenes_compra WHERE folio_oc = ?",
+                (payload["folio_oc"],),
+            )
+        except Exception as exc:
+            conn.rollback()
+            conn.close()
+            return error(f"No se pudo registrar la compra: {exc}")
+        conn.close()
+        return jsonify(resultado), 201
+
     missing = require_fields(
         payload, ["folio_documento", "id_tercero", "fecha_emision", "descripcion", "monto_neto"]
     )

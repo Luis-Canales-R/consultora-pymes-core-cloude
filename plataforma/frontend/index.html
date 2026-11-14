@@ -91,21 +91,32 @@
     <section id="view-compras" class="view">
       <h2>Compras y Gastos</h2>
       <form id="form-compra" class="form-grid">
-        <label>Folio documento <input name="folio_documento" required></label>
+        <label>Folio documento <input name="folio_oc" required></label>
         <label>Proveedor
           <select name="id_tercero" required data-role="proveedor"></select>
+        </label>
+        <label>Producto/Servicio
+          <select name="id_item" required><option value="">-- Seleccione --</option></select>
         </label>
         <label>Centro de costo
           <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
         </label>
         <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
-        <label>Descripción <input name="descripcion" required></label>
-        <label>Monto neto <input type="number" step="0.01" name="monto_neto" required></label>
+        <label>Descripción <input name="descripcion" placeholder="(solo modo demo SQLite)"></label>
+        <label>Monto neto <input type="number" step="0.01" name="monto_neto" required placeholder="(se precarga al elegir producto)"></label>
+        <label>Estado
+          <select name="estado_oc">
+            <option value="RECIBIDA">Recibida</option>
+            <option value="BORRADOR">Borrador</option>
+            <option value="APROBADA">Aprobada</option>
+            <option value="ANULADA">Anulada</option>
+          </select>
+        </label>
         <button type="submit">Registrar compra/gasto</button>
         <span class="form-msg" id="msg-compra"></span>
       </form>
       <table class="data-table" id="tabla-compras">
-        <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Descripción</th><th>Neto</th><th>IVA</th><th>Total</th></tr></thead>
+        <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>

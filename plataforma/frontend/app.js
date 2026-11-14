@@ -269,20 +269,34 @@ async function loadCompras() {
   rows.forEach((c) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${c.folio_documento}</td>
+      <td>${c.folio_oc || c.folio_documento || ""}</td>
       <td>${c.proveedor}</td>
       <td>${c.centro_costo || "—"}</td>
       <td>${fmtFecha(c.fecha_emision)}</td>
-      <td>${c.descripcion}</td>
       <td>${fmtMoney(c.monto_neto)}</td>
       <td>${fmtMoney(c.monto_iva)}</td>
-      <td>${fmtMoney(c.monto_total)}</td>`;
+      <td>${fmtMoney(c.monto_total)}</td>
+      <td>${c.estado_oc || c.estado_compra || ""}</td>`;
     tbody.appendChild(tr);
   });
 }
 
 function initFormCompra() {
   const form = document.getElementById("form-compra");
+
+  // Mismo patrón que Ventas: al elegir un producto/servicio, precarga el
+  // monto neto con su precio de lista (precio_venta_base). Editable.
+  const selProducto = form.querySelector('select[name="id_item"]');
+  const inputMonto = form.querySelector('input[name="monto_neto"]');
+  if (selProducto && inputMonto) {
+    selProducto.addEventListener("change", () => {
+      const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === selProducto.value);
+      if (p && p.precio_venta_base != null) {
+        inputMonto.value = p.precio_venta_base;
+      }
+    });
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
