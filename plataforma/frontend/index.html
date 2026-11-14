@@ -69,7 +69,7 @@
           <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
         </label>
         <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
-        <label>Monto neto <input type="number" step="0.01" name="monto_neto" required></label>
+        <label>Monto neto <input type="number" step="0.01" name="monto_neto" required placeholder="(se precarga al elegir producto)"></label>
         <label>Estado
           <select name="estado_venta">
             <option value="DEVENGADO">Devengado</option>
@@ -80,6 +80,7 @@
         <button type="submit">Registrar venta</button>
         <span class="form-msg" id="msg-venta"></span>
       </form>
+      <p class="hint">El monto neto se precarga con el precio de lista del producto elegido; puedes editarlo si el precio real de esta venta es distinto (descuentos, precio negociado, etc.).</p>
       <table class="data-table" id="tabla-ventas">
         <thead><tr><th>Folio</th><th>Cliente</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>

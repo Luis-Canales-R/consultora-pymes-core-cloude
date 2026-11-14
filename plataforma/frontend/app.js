@@ -228,6 +228,21 @@ async function loadVentas() {
 
 function initFormVenta() {
   const form = document.getElementById("form-venta");
+
+  // Al elegir un producto/servicio, precarga el monto neto con su precio
+  // de lista (precio_venta_base). El usuario puede ajustarlo libremente
+  // antes de enviar (ej. descuentos, precios negociados).
+  const selProducto = form.querySelector('select[name="id_item"]');
+  const inputMonto = form.querySelector('input[name="monto_neto"]');
+  if (selProducto && inputMonto) {
+    selProducto.addEventListener("change", () => {
+      const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === selProducto.value);
+      if (p && p.precio_venta_base != null) {
+        inputMonto.value = p.precio_venta_base;
+      }
+    });
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
