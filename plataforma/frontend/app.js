@@ -226,22 +226,46 @@ async function loadVentas() {
   });
 }
 
-function initFormVenta() {
-  const form = document.getElementById("form-venta");
-
-  // Al elegir un producto/servicio, precarga el monto neto con su precio
-  // de lista (precio_venta_base). El usuario puede ajustarlo libremente
-  // antes de enviar (ej. descuentos, precios negociados).
+// Helper compartido por Ventas y Compras: al elegir un producto/servicio,
+// precarga el Precio unitario con su precio de lista (precio_venta_base);
+// el usuario puede ajustarlo (descuentos, precio negociado, etc.). Además
+// mantiene un campo de solo lectura con el Monto neto calculado
+// (Cantidad x Precio unitario), para que la cantidad real quede siempre
+// visible y correcta -- clave para el costeo de inventario (CPP) y el
+// stock de los ítems de Reventa.
+function wireCantidadPrecioCalculado(form, calculadoInputId) {
   const selProducto = form.querySelector('select[name="id_item"]');
-  const inputMonto = form.querySelector('input[name="monto_neto"]');
-  if (selProducto && inputMonto) {
+  const inputPrecio = form.querySelector('input[name="precio_unitario"]');
+  const inputCantidad = form.querySelector('input[name="cantidad"]');
+  const inputCalculado = document.getElementById(calculadoInputId);
+
+  function recalcular() {
+    if (!inputCalculado) return;
+    const cantidad = parseFloat(inputCantidad && inputCantidad.value);
+    const precio = parseFloat(inputPrecio && inputPrecio.value);
+    if (!isNaN(cantidad) && !isNaN(precio)) {
+      inputCalculado.value = fmtMoney(cantidad * precio);
+    } else {
+      inputCalculado.value = "";
+    }
+  }
+
+  if (selProducto && inputPrecio) {
     selProducto.addEventListener("change", () => {
       const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === selProducto.value);
       if (p && p.precio_venta_base != null) {
-        inputMonto.value = p.precio_venta_base;
+        inputPrecio.value = p.precio_venta_base;
       }
+      recalcular();
     });
   }
+  if (inputCantidad) inputCantidad.addEventListener("input", recalcular);
+  if (inputPrecio) inputPrecio.addEventListener("input", recalcular);
+}
+
+function initFormVenta() {
+  const form = document.getElementById("form-venta");
+  wireCantidadPrecioCalculado(form, "venta-neto-calculado");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -283,19 +307,7 @@ async function loadCompras() {
 
 function initFormCompra() {
   const form = document.getElementById("form-compra");
-
-  // Mismo patrón que Ventas: al elegir un producto/servicio, precarga el
-  // monto neto con su precio de lista (precio_venta_base). Editable.
-  const selProducto = form.querySelector('select[name="id_item"]');
-  const inputMonto = form.querySelector('input[name="monto_neto"]');
-  if (selProducto && inputMonto) {
-    selProducto.addEventListener("change", () => {
-      const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === selProducto.value);
-      if (p && p.precio_venta_base != null) {
-        inputMonto.value = p.precio_venta_base;
-      }
-    });
-  }
+  wireCantidadPrecioCalculado(form, "compra-neto-calculado");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();

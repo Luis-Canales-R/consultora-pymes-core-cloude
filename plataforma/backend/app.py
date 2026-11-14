@@ -353,8 +353,11 @@ def crear_venta():
         # En el esquema real toda venta es de un ítem/servicio concreto
         # (se la pasa a sp_procesar_venta_externa, que calcula neto/IVA/
         # total y genera el asiento contable correcto según el ítem).
+        # IMPORTANTE: cantidad y precio_unitario reales (no solo el monto
+        # total) son obligatorios porque el kardex de inventario (CPP y
+        # stock) depende de la cantidad real vendida, no de "1 unidad".
         missing = require_fields(
-            payload, ["folio_factura", "id_tercero", "id_item", "fecha_emision", "monto_neto"]
+            payload, ["folio_factura", "id_tercero", "id_item", "fecha_emision", "cantidad", "precio_unitario"]
         )
         if missing:
             return error(missing)
@@ -375,12 +378,12 @@ def crear_venta():
                 """EXEC dbo.sp_procesar_venta_externa
                        @folio_factura = ?, @fecha_emision = ?,
                        @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
-                       @cantidad = 1, @precio_unitario = ?,
+                       @cantidad = ?, @precio_unitario = ?,
                        @estado_venta = ?, @id_centro_costo = ?""",
                 (
                     payload["folio_factura"], payload["fecha_emision"],
                     cliente["razon_social"], producto["nombre"],
-                    float(payload["monto_neto"]),
+                    float(payload["cantidad"]), float(payload["precio_unitario"]),
                     payload.get("estado_venta", "DEVENGADO"),
                     payload.get("id_centro_costo"),
                 ),
@@ -398,10 +401,10 @@ def crear_venta():
         conn.close()
         return jsonify(resultado), 201
 
-    missing = require_fields(payload, ["folio_factura", "id_tercero", "fecha_emision", "monto_neto"])
+    missing = require_fields(payload, ["folio_factura", "id_tercero", "fecha_emision", "cantidad", "precio_unitario"])
     if missing:
         return error(missing)
-    monto_neto = float(payload["monto_neto"])
+    monto_neto = round(float(payload["cantidad"]) * float(payload["precio_unitario"]), 2)
     monto_iva = round(monto_neto * IVA_RATE, 2)
     monto_total = round(monto_neto + monto_iva, 2)
     conn = db.get_conn()
@@ -471,8 +474,11 @@ def crear_compra():
         # catálogo (se le pasa a sp_procesar_compra_externa, que calcula
         # neto/IVA/total, mueve el kardex si corresponde y genera el
         # asiento contable correcto según el ítem).
+        # IMPORTANTE: cantidad y precio_unitario reales son obligatorios:
+        # si el ítem es de Reventa, la cantidad real determina cuánto
+        # stock entra al kardex y a qué costo promedio (CPP) queda.
         missing = require_fields(
-            payload, ["folio_oc", "id_tercero", "id_item", "fecha_emision", "monto_neto"]
+            payload, ["folio_oc", "id_tercero", "id_item", "fecha_emision", "cantidad", "precio_unitario"]
         )
         if missing:
             return error(missing)
@@ -493,12 +499,12 @@ def crear_compra():
                 """EXEC dbo.sp_procesar_compra_externa
                        @folio_oc = ?, @fecha_emision = ?,
                        @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
-                       @cantidad = 1, @precio_unitario = ?,
+                       @cantidad = ?, @precio_unitario = ?,
                        @estado_oc = ?, @id_centro_costo = ?""",
                 (
                     payload["folio_oc"], payload["fecha_emision"],
                     proveedor["razon_social"], producto["nombre"],
-                    float(payload["monto_neto"]),
+                    float(payload["cantidad"]), float(payload["precio_unitario"]),
                     payload.get("estado_oc", "RECIBIDA"),
                     payload.get("id_centro_costo"),
                 ),
@@ -517,11 +523,11 @@ def crear_compra():
         return jsonify(resultado), 201
 
     missing = require_fields(
-        payload, ["folio_documento", "id_tercero", "fecha_emision", "descripcion", "monto_neto"]
+        payload, ["folio_documento", "id_tercero", "fecha_emision", "descripcion", "cantidad", "precio_unitario"]
     )
     if missing:
         return error(missing)
-    monto_neto = float(payload["monto_neto"])
+    monto_neto = round(float(payload["cantidad"]) * float(payload["precio_unitario"]), 2)
     monto_iva = round(monto_neto * IVA_RATE, 2)
     monto_total = round(monto_neto + monto_iva, 2)
     conn = db.get_conn()
