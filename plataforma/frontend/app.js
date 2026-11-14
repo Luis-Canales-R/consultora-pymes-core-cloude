@@ -144,7 +144,7 @@ function fillCentroSelects() {
 }
 
 function fillProductoSelects() {
-  document.querySelectorAll('select[name="id_item"]').forEach((sel) => {
+  document.querySelectorAll('select[name="id_item"], select.producto-select').forEach((sel) => {
     const current = sel.value;
     const placeholder = sel.querySelector('option[value=""]');
     sel.innerHTML = "";
@@ -226,53 +226,111 @@ async function loadVentas() {
   });
 }
 
-// Helper compartido por Ventas y Compras: al elegir un producto/servicio,
-// precarga el Precio unitario con su precio de lista (precio_venta_base);
-// el usuario puede ajustarlo (descuentos, precio negociado, etc.). Además
-// mantiene un campo de solo lectura con el Monto neto calculado
-// (Cantidad x Precio unitario), para que la cantidad real quede siempre
-// visible y correcta -- clave para el costeo de inventario (CPP) y el
-// stock de los ítems de Reventa.
-function wireCantidadPrecioCalculado(form, calculadoInputId) {
-  const selProducto = form.querySelector('select[name="id_item"]');
-  const inputPrecio = form.querySelector('input[name="precio_unitario"]');
-  const inputCantidad = form.querySelector('input[name="cantidad"]');
-  const inputCalculado = document.getElementById(calculadoInputId);
+// Constructor de líneas reutilizable por Ventas y Compras: un documento
+// (folio) puede traer varios ítems distintos, igual que en un ERP real
+// (encabezado una vez + tabla de líneas + un solo envío atómico). `prefix`
+// es "venta" o "compra"; se espera encontrar en el DOM:
+//   #{prefix}-linea-item (select.producto-select), #{prefix}-linea-cantidad,
+//   #{prefix}-linea-precio, #{prefix}-linea-subtotal (solo lectura),
+//   #{prefix}-agregar-linea (botón), #{prefix}-lineas-tabla (tabla),
+//   #{prefix}-total-neto (texto totalizador)
+function crearConstructorLineas(prefix) {
+  const selProducto = document.getElementById(`${prefix}-linea-item`);
+  const inputCantidad = document.getElementById(`${prefix}-linea-cantidad`);
+  const inputPrecio = document.getElementById(`${prefix}-linea-precio`);
+  const inputSubtotal = document.getElementById(`${prefix}-linea-subtotal`);
+  const btnAgregar = document.getElementById(`${prefix}-agregar-linea`);
+  const tbody = document.querySelector(`#${prefix}-lineas-tabla tbody`);
+  const totalNetoEl = document.getElementById(`${prefix}-total-neto`);
 
-  function recalcular() {
-    if (!inputCalculado) return;
-    const cantidad = parseFloat(inputCantidad && inputCantidad.value);
-    const precio = parseFloat(inputPrecio && inputPrecio.value);
-    if (!isNaN(cantidad) && !isNaN(precio)) {
-      inputCalculado.value = fmtMoney(cantidad * precio);
-    } else {
-      inputCalculado.value = "";
-    }
+  let lineas = [];
+
+  function recalcularPreview() {
+    const cantidad = parseFloat(inputCantidad.value);
+    const precio = parseFloat(inputPrecio.value);
+    inputSubtotal.value = !isNaN(cantidad) && !isNaN(precio) ? fmtMoney(cantidad * precio) : "";
   }
 
-  if (selProducto && inputPrecio) {
-    selProducto.addEventListener("change", () => {
-      const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === selProducto.value);
-      if (p && p.precio_venta_base != null) {
-        inputPrecio.value = p.precio_venta_base;
-      }
-      recalcular();
+  function render() {
+    tbody.innerHTML = "";
+    lineas.forEach((l, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${l.nombre}</td>
+        <td>${l.cantidad}</td>
+        <td>${fmtMoney(l.precio_unitario)}</td>
+        <td>${fmtMoney(l.cantidad * l.precio_unitario)}</td>
+        <td><button type="button" class="btn-quitar-linea" data-idx="${i}">Quitar</button></td>`;
+      tbody.appendChild(tr);
+    });
+    const totalNeto = lineas.reduce((acc, l) => acc + l.cantidad * l.precio_unitario, 0);
+    totalNetoEl.textContent = fmtMoney(totalNeto);
+    tbody.querySelectorAll(".btn-quitar-linea").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        lineas.splice(Number(btn.dataset.idx), 1);
+        render();
+      });
     });
   }
-  if (inputCantidad) inputCantidad.addEventListener("input", recalcular);
-  if (inputPrecio) inputPrecio.addEventListener("input", recalcular);
+
+  selProducto.addEventListener("change", () => {
+    const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === selProducto.value);
+    if (p && p.precio_venta_base != null) inputPrecio.value = p.precio_venta_base;
+    recalcularPreview();
+  });
+  inputCantidad.addEventListener("input", recalcularPreview);
+  inputPrecio.addEventListener("input", recalcularPreview);
+
+  btnAgregar.addEventListener("click", () => {
+    const idItem = selProducto.value;
+    const cantidad = parseFloat(inputCantidad.value);
+    const precio = parseFloat(inputPrecio.value);
+    if (!idItem) return alert("Elige un producto/servicio para agregarlo como ítem.");
+    if (isNaN(cantidad) || cantidad <= 0) return alert("La cantidad debe ser mayor a cero.");
+    if (isNaN(precio) || precio < 0) return alert("El precio unitario no puede ser negativo.");
+
+    const p = CACHE_PRODUCTOS.find((x) => String(x.id_item) === idItem);
+    lineas.push({
+      id_item: idItem,
+      nombre: p ? `${p.nombre} (${p.sku_codigo})` : idItem,
+      cantidad,
+      precio_unitario: precio,
+    });
+    render();
+
+    // Deja el constructor listo para el siguiente ítem.
+    selProducto.value = "";
+    inputCantidad.value = "1";
+    inputPrecio.value = "";
+    inputSubtotal.value = "";
+  });
+
+  return {
+    getLineas: () => lineas.map((l) => ({ id_item: l.id_item, cantidad: l.cantidad, precio_unitario: l.precio_unitario })),
+    reset: () => {
+      lineas = [];
+      render();
+    },
+  };
 }
 
 function initFormVenta() {
   const form = document.getElementById("form-venta");
-  wireCantidadPrecioCalculado(form, "venta-neto-calculado");
+  const constructor = crearConstructorLineas("venta");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const lineas = constructor.getLineas();
+    if (lineas.length === 0) {
+      return showMsg("msg-venta", "Agrega al menos un ítem antes de registrar la venta.", false);
+    }
+    const payload = formToPayload(form);
+    payload.lineas = lineas;
     try {
-      await apiPost("/ventas", formToPayload(form));
+      await apiPost("/ventas", payload);
       showMsg("msg-venta", "Venta registrada.");
       form.reset();
+      constructor.reset();
       loadVentas();
       loadDashboard();
     } catch (err) {
@@ -307,14 +365,21 @@ async function loadCompras() {
 
 function initFormCompra() {
   const form = document.getElementById("form-compra");
-  wireCantidadPrecioCalculado(form, "compra-neto-calculado");
+  const constructor = crearConstructorLineas("compra");
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const lineas = constructor.getLineas();
+    if (lineas.length === 0) {
+      return showMsg("msg-compra", "Agrega al menos un ítem antes de registrar la compra.", false);
+    }
+    const payload = formToPayload(form);
+    payload.lineas = lineas;
     try {
-      await apiPost("/compras", formToPayload(form));
+      await apiPost("/compras", payload);
       showMsg("msg-compra", "Compra/gasto registrado.");
       form.reset();
+      constructor.reset();
       loadCompras();
       loadDashboard();
     } catch (err) {

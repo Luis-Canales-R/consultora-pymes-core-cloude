@@ -62,16 +62,10 @@
         <label>Cliente
           <select name="id_tercero" required data-role="cliente"></select>
         </label>
-        <label>Producto/Servicio
-          <select name="id_item" required><option value="">-- Seleccione --</option></select>
-        </label>
         <label>Centro de costo
           <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
         </label>
         <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
-        <label>Cantidad <input type="number" step="0.0001" min="0.0001" name="cantidad" required value="1"></label>
-        <label>Precio unitario <input type="number" step="0.01" min="0" name="precio_unitario" required placeholder="(se precarga al elegir producto)"></label>
-        <label>Monto neto (calculado) <input type="text" id="venta-neto-calculado" disabled placeholder="—"></label>
         <label>Estado
           <select name="estado_venta">
             <option value="DEVENGADO">Devengado</option>
@@ -79,11 +73,27 @@
             <option value="PAGADO">Pagado</option>
           </select>
         </label>
-        <button type="submit">Registrar venta</button>
-        <span class="form-msg" id="msg-venta"></span>
       </form>
-      <p class="hint">El precio unitario se precarga con el precio de lista del producto elegido; puedes editarlo si el precio real de esta venta es distinto (descuentos, precio negociado, etc.). Cantidad x Precio unitario = Monto neto — importante dejar la cantidad real para que el costeo de inventario (CPP) y el stock queden correctos.</p>
-      <p class="hint"><strong>¿La factura tiene varios productos/servicios distintos?</strong> Repite el registro usando el <strong>mismo Folio factura</strong> y el mismo Cliente, cambiando solo el Producto/Servicio, Cantidad y Precio unitario de cada ítem. La plataforma va sumando los montos a la misma factura automáticamente.</p>
+
+      <div class="line-builder form-grid" id="venta-line-builder">
+        <label>Producto/Servicio
+          <select id="venta-linea-item" class="producto-select"><option value="">-- Seleccione --</option></select>
+        </label>
+        <label>Cantidad <input type="number" step="0.0001" min="0.0001" id="venta-linea-cantidad" value="1"></label>
+        <label>Precio unitario <input type="number" step="0.01" min="0" id="venta-linea-precio" placeholder="(se precarga al elegir producto)"></label>
+        <label>Subtotal <input type="text" id="venta-linea-subtotal" disabled placeholder="—"></label>
+        <button type="button" id="venta-agregar-linea">+ Agregar ítem</button>
+      </div>
+
+      <table class="data-table" id="venta-lineas-tabla">
+        <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unit.</th><th>Subtotal</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="hint">Agrega aquí todos los ítems de esta factura (uno por uno, con "+ Agregar ítem"). Cuando la lista esté completa, con los datos del encabezado (folio, cliente, fecha, etc.) ya llenos arriba, presiona "Registrar venta" para enviarla completa de una sola vez.</p>
+      <p class="totales-linea">Monto neto total: <strong id="venta-total-neto">$0</strong></p>
+      <button type="submit" form="form-venta" id="venta-submit">Registrar venta</button>
+      <span class="form-msg" id="msg-venta"></span>
+
       <table class="data-table" id="tabla-ventas">
         <thead><tr><th>Folio</th><th>Cliente</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>
@@ -98,17 +108,11 @@
         <label>Proveedor
           <select name="id_tercero" required data-role="proveedor"></select>
         </label>
-        <label>Producto/Servicio
-          <select name="id_item" required><option value="">-- Seleccione --</option></select>
-        </label>
         <label>Centro de costo
           <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
         </label>
         <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
         <label>Descripción <input name="descripcion" placeholder="(solo modo demo SQLite)"></label>
-        <label>Cantidad <input type="number" step="0.0001" min="0.0001" name="cantidad" required value="1"></label>
-        <label>Precio unitario <input type="number" step="0.01" min="0" name="precio_unitario" required placeholder="(se precarga al elegir producto)"></label>
-        <label>Monto neto (calculado) <input type="text" id="compra-neto-calculado" disabled placeholder="—"></label>
         <label>Estado
           <select name="estado_oc">
             <option value="RECIBIDA">Recibida</option>
@@ -117,11 +121,27 @@
             <option value="ANULADA">Anulada</option>
           </select>
         </label>
-        <button type="submit">Registrar compra/gasto</button>
-        <span class="form-msg" id="msg-compra"></span>
       </form>
-      <p class="hint">El precio unitario se precarga con el precio de lista del producto elegido; ajústalo al precio real de esta compra. Cantidad x Precio unitario = Monto neto — la cantidad real es clave si el ítem es de Reventa, porque determina cuánto stock entra y a qué costo promedio.</p>
-      <p class="hint"><strong>¿La factura del proveedor tiene varios productos/servicios distintos?</strong> Repite el registro usando el <strong>mismo Folio documento</strong> y el mismo Proveedor, cambiando solo el Producto/Servicio, Cantidad y Precio unitario de cada ítem. La plataforma va sumando los montos a la misma compra automáticamente.</p>
+
+      <div class="line-builder form-grid" id="compra-line-builder">
+        <label>Producto/Servicio
+          <select id="compra-linea-item" class="producto-select"><option value="">-- Seleccione --</option></select>
+        </label>
+        <label>Cantidad <input type="number" step="0.0001" min="0.0001" id="compra-linea-cantidad" value="1"></label>
+        <label>Precio unitario <input type="number" step="0.01" min="0" id="compra-linea-precio" placeholder="(se precarga al elegir producto)"></label>
+        <label>Subtotal <input type="text" id="compra-linea-subtotal" disabled placeholder="—"></label>
+        <button type="button" id="compra-agregar-linea">+ Agregar ítem</button>
+      </div>
+
+      <table class="data-table" id="compra-lineas-tabla">
+        <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unit.</th><th>Subtotal</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="hint">Agrega aquí todos los ítems de esta compra/factura de proveedor (uno por uno, con "+ Agregar ítem"). Cuando la lista esté completa, con los datos del encabezado (folio, proveedor, fecha, etc.) ya llenos arriba, presiona "Registrar compra/gasto" para enviarla completa de una sola vez. La cantidad real de cada ítem es clave si es de Reventa, porque determina cuánto stock entra al kardex y a qué costo promedio.</p>
+      <p class="totales-linea">Monto neto total: <strong id="compra-total-neto">$0</strong></p>
+      <button type="submit" form="form-compra" id="compra-submit">Registrar compra/gasto</button>
+      <span class="form-msg" id="msg-compra"></span>
+
       <table class="data-table" id="tabla-compras">
         <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>

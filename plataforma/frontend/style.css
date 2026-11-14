@@ -151,3 +151,18 @@ h2 { margin-top: 0; }
   border-bottom: 1px solid var(--line);
 }
 .data-table tbody tr:hover { background: #fafbfc; }
+
+.totales-linea {
+  font-size: 14px;
+  margin: 10px 0;
+}
+.btn-quitar-linea {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #c23a3a;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 8px;
+}
+.btn-quitar-linea:hover { background: #fdecec; }

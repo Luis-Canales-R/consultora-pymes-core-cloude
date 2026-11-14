@@ -345,49 +345,68 @@ def listar_ventas():
     return jsonify(rows)
 
 
+def _validar_lineas(payload):
+    """Valida el arreglo 'lineas' (documento multi-ítem). Devuelve un
+    mensaje de error (str) o None si está bien formado."""
+    lineas = payload.get("lineas")
+    if not isinstance(lineas, list) or len(lineas) == 0:
+        return "Falta 'lineas' (debe ser una lista con al menos un ítem)."
+    for i, linea in enumerate(lineas, start=1):
+        for campo in ("id_item", "cantidad", "precio_unitario"):
+            if linea.get(campo) in (None, ""):
+                return f"Línea {i}: falta '{campo}'."
+    return None
+
+
 @app.route("/api/ventas", methods=["POST"])
 def crear_venta():
     payload = request.get_json(force=True)
 
     if db.DB_ENGINE == "mssql":
-        # En el esquema real toda venta es de un ítem/servicio concreto
-        # (se la pasa a sp_procesar_venta_externa, que calcula neto/IVA/
-        # total y genera el asiento contable correcto según el ítem).
-        # IMPORTANTE: cantidad y precio_unitario reales (no solo el monto
-        # total) son obligatorios porque el kardex de inventario (CPP y
-        # stock) depende de la cantidad real vendida, no de "1 unidad".
-        missing = require_fields(
-            payload, ["folio_factura", "id_tercero", "id_item", "fecha_emision", "cantidad", "precio_unitario"]
-        )
+        # En el esquema real una venta es un DOCUMENTO (folio) con una o
+        # varias líneas, cada una de un ítem/servicio concreto (se pasa a
+        # sp_procesar_venta_externa, que calcula neto/IVA/total y genera
+        # el asiento contable correcto según cada ítem). Todas las líneas
+        # se procesan en UNA sola conexión/transacción: o se registran
+        # todas, o no se registra ninguna (atomicidad del documento
+        # completo, igual que en un ERP real).
+        missing = require_fields(payload, ["folio_factura", "id_tercero", "fecha_emision"])
         if missing:
             return error(missing)
+        err = _validar_lineas(payload)
+        if err:
+            return error(err)
+
         conn = db.get_conn()
         try:
             cliente = db.fetch_one_dict(
                 conn, "SELECT razon_social FROM tbl_terceros WHERE id_tercero = ?", (payload["id_tercero"],)
             )
-            producto = db.fetch_one_dict(
-                conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (payload["id_item"],)
-            )
             if not cliente:
                 return error("Cliente no encontrado.")
-            if not producto:
-                return error("Producto/servicio no encontrado.")
 
-            conn.execute(
-                """EXEC dbo.sp_procesar_venta_externa
-                       @folio_factura = ?, @fecha_emision = ?,
-                       @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
-                       @cantidad = ?, @precio_unitario = ?,
-                       @estado_venta = ?, @id_centro_costo = ?""",
-                (
-                    payload["folio_factura"], payload["fecha_emision"],
-                    cliente["razon_social"], producto["nombre"],
-                    float(payload["cantidad"]), float(payload["precio_unitario"]),
-                    payload.get("estado_venta", "DEVENGADO"),
-                    payload.get("id_centro_costo"),
-                ),
-            )
+            for i, linea in enumerate(payload["lineas"], start=1):
+                producto = db.fetch_one_dict(
+                    conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (linea["id_item"],)
+                )
+                if not producto:
+                    raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
+
+                conn.execute(
+                    """EXEC dbo.sp_procesar_venta_externa
+                           @folio_factura = ?, @fecha_emision = ?,
+                           @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
+                           @cantidad = ?, @precio_unitario = ?,
+                           @estado_venta = ?, @id_centro_costo = ?""",
+                    (
+                        payload["folio_factura"], payload["fecha_emision"],
+                        cliente["razon_social"], producto["nombre"],
+                        float(linea["cantidad"]), float(linea["precio_unitario"]),
+                        payload.get("estado_venta", "DEVENGADO"),
+                        payload.get("id_centro_costo"),
+                    ),
+                )
+
             conn.commit()
             resultado = db.fetch_one_dict(
                 conn,
@@ -395,16 +414,24 @@ def crear_venta():
                 (payload["folio_factura"],),
             )
         except Exception as exc:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass  # el SP ya pudo haber hecho su propio ROLLBACK ante el error
             conn.close()
             return error(f"No se pudo registrar la venta: {exc}")
         conn.close()
         return jsonify(resultado), 201
 
-    missing = require_fields(payload, ["folio_factura", "id_tercero", "fecha_emision", "cantidad", "precio_unitario"])
+    missing = require_fields(payload, ["folio_factura", "id_tercero", "fecha_emision"])
     if missing:
         return error(missing)
-    monto_neto = round(float(payload["cantidad"]) * float(payload["precio_unitario"]), 2)
+    err = _validar_lineas(payload)
+    if err:
+        return error(err)
+    monto_neto = round(
+        sum(float(l["cantidad"]) * float(l["precio_unitario"]) for l in payload["lineas"]), 2
+    )
     monto_iva = round(monto_neto * IVA_RATE, 2)
     monto_total = round(monto_neto + monto_iva, 2)
     conn = db.get_conn()
@@ -470,45 +497,51 @@ def crear_compra():
     payload = request.get_json(force=True)
 
     if db.DB_ENGINE == "mssql":
-        # En el esquema real toda compra es de un ítem concreto del
-        # catálogo (se le pasa a sp_procesar_compra_externa, que calcula
-        # neto/IVA/total, mueve el kardex si corresponde y genera el
-        # asiento contable correcto según el ítem).
-        # IMPORTANTE: cantidad y precio_unitario reales son obligatorios:
-        # si el ítem es de Reventa, la cantidad real determina cuánto
-        # stock entra al kardex y a qué costo promedio (CPP) queda.
-        missing = require_fields(
-            payload, ["folio_oc", "id_tercero", "id_item", "fecha_emision", "cantidad", "precio_unitario"]
-        )
+        # En el esquema real una compra es un DOCUMENTO (folio) con una o
+        # varias líneas, cada una de un ítem concreto del catálogo (se pasa
+        # a sp_procesar_compra_externa, que calcula neto/IVA/total, mueve
+        # el kardex si corresponde y genera el asiento contable correcto
+        # según cada ítem). Todas las líneas se procesan en UNA sola
+        # conexión/transacción: o se registran todas, o no se registra
+        # ninguna (atomicidad del documento completo, igual que en un ERP
+        # real).
+        missing = require_fields(payload, ["folio_oc", "id_tercero", "fecha_emision"])
         if missing:
             return error(missing)
+        err = _validar_lineas(payload)
+        if err:
+            return error(err)
+
         conn = db.get_conn()
         try:
             proveedor = db.fetch_one_dict(
                 conn, "SELECT razon_social FROM tbl_terceros WHERE id_tercero = ?", (payload["id_tercero"],)
             )
-            producto = db.fetch_one_dict(
-                conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (payload["id_item"],)
-            )
             if not proveedor:
                 return error("Proveedor no encontrado.")
-            if not producto:
-                return error("Producto/servicio no encontrado.")
 
-            conn.execute(
-                """EXEC dbo.sp_procesar_compra_externa
-                       @folio_oc = ?, @fecha_emision = ?,
-                       @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
-                       @cantidad = ?, @precio_unitario = ?,
-                       @estado_oc = ?, @id_centro_costo = ?""",
-                (
-                    payload["folio_oc"], payload["fecha_emision"],
-                    proveedor["razon_social"], producto["nombre"],
-                    float(payload["cantidad"]), float(payload["precio_unitario"]),
-                    payload.get("estado_oc", "RECIBIDA"),
-                    payload.get("id_centro_costo"),
-                ),
-            )
+            for i, linea in enumerate(payload["lineas"], start=1):
+                producto = db.fetch_one_dict(
+                    conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (linea["id_item"],)
+                )
+                if not producto:
+                    raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
+
+                conn.execute(
+                    """EXEC dbo.sp_procesar_compra_externa
+                           @folio_oc = ?, @fecha_emision = ?,
+                           @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
+                           @cantidad = ?, @precio_unitario = ?,
+                           @estado_oc = ?, @id_centro_costo = ?""",
+                    (
+                        payload["folio_oc"], payload["fecha_emision"],
+                        proveedor["razon_social"], producto["nombre"],
+                        float(linea["cantidad"]), float(linea["precio_unitario"]),
+                        payload.get("estado_oc", "RECIBIDA"),
+                        payload.get("id_centro_costo"),
+                    ),
+                )
+
             conn.commit()
             resultado = db.fetch_one_dict(
                 conn,
@@ -516,18 +549,26 @@ def crear_compra():
                 (payload["folio_oc"],),
             )
         except Exception as exc:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass  # el SP ya pudo haber hecho su propio ROLLBACK ante el error
             conn.close()
             return error(f"No se pudo registrar la compra: {exc}")
         conn.close()
         return jsonify(resultado), 201
 
     missing = require_fields(
-        payload, ["folio_documento", "id_tercero", "fecha_emision", "descripcion", "cantidad", "precio_unitario"]
+        payload, ["folio_documento", "id_tercero", "fecha_emision", "descripcion"]
     )
     if missing:
         return error(missing)
-    monto_neto = round(float(payload["cantidad"]) * float(payload["precio_unitario"]), 2)
+    err = _validar_lineas(payload)
+    if err:
+        return error(err)
+    monto_neto = round(
+        sum(float(l["cantidad"]) * float(l["precio_unitario"]) for l in payload["lineas"]), 2
+    )
     monto_iva = round(monto_neto * IVA_RATE, 2)
     monto_total = round(monto_neto + monto_iva, 2)
     conn = db.get_conn()
