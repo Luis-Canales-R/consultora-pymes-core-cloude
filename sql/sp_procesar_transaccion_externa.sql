@@ -153,19 +153,42 @@ BEGIN
         -- 5. Inserción Transaccional Segura hacia el Core
         BEGIN TRANSACTION;
 
+            -- v8 (Documentos Multi-Ítem): un folio puede traer varios ítems
+            -- distintos (una misma factura con varias líneas). Si el folio
+            -- YA existe, se AGREGA una línea de detalle más a esa misma
+            -- cabecera (acumulando sus montos) en vez de rechazarlo; si es
+            -- la primera línea de ese folio, se crea la cabecera. El asiento
+            -- contable de esta línea se registra igual que siempre (una
+            -- venta con 3 ítems queda con 3 asientos encadenados al mismo
+            -- folio, cada uno auditable por separado).
             IF EXISTS (SELECT 1 FROM tbl_ventas_devengadas WHERE folio_factura = @folio_factura)
             BEGIN
-                RAISERROR('El folio "%s" ya existe en tbl_ventas_devengadas. Use un folio único por documento.', 16, 1, @folio_factura);
-                ROLLBACK TRANSACTION;
-                RETURN;
+                SELECT @id_venta_devengada = id_venta_devengada
+                FROM tbl_ventas_devengadas
+                WHERE folio_factura = @folio_factura;
+
+                IF (SELECT id_tercero FROM tbl_ventas_devengadas WHERE id_venta_devengada = @id_venta_devengada) <> @id_tercero_oficial
+                BEGIN
+                    RAISERROR('El folio "%s" ya existe para otro cliente. No se puede agregar un ítem con un cliente distinto al mismo folio.', 16, 1, @folio_factura);
+                    ROLLBACK TRANSACTION;
+                    RETURN;
+                END
+
+                UPDATE tbl_ventas_devengadas
+                SET monto_neto = monto_neto + @subtotal_neto,
+                    monto_iva = monto_iva + @monto_iva,
+                    monto_total = monto_total + @monto_total
+                WHERE id_venta_devengada = @id_venta_devengada;
             END
+            ELSE
+            BEGIN
+                SELECT @id_venta_devengada = ISNULL(MAX(id_venta_devengada), 0) + 1 FROM tbl_ventas_devengadas;
 
-            SELECT @id_venta_devengada = ISNULL(MAX(id_venta_devengada), 0) + 1 FROM tbl_ventas_devengadas;
-
-            INSERT INTO tbl_ventas_devengadas
-                (id_venta_devengada, folio_factura, id_tercero, fecha_emision, monto_neto, monto_iva, monto_total, estado_venta, id_centro_costo, id_empleado)
-            VALUES
-                (@id_venta_devengada, @folio_factura, @id_tercero_oficial, @fecha_emision, @subtotal_neto, @monto_iva, @monto_total, @estado_venta, @id_centro_costo, @id_empleado);
+                INSERT INTO tbl_ventas_devengadas
+                    (id_venta_devengada, folio_factura, id_tercero, fecha_emision, monto_neto, monto_iva, monto_total, estado_venta, id_centro_costo, id_empleado)
+                VALUES
+                    (@id_venta_devengada, @folio_factura, @id_tercero_oficial, @fecha_emision, @subtotal_neto, @monto_iva, @monto_total, @estado_venta, @id_centro_costo, @id_empleado);
+            END
 
             INSERT INTO tbl_ventas_detalle
                 (id_venta_detalle, id_venta_devengada, id_item, cantidad, precio_unitario, subtotal_neto)

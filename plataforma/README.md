@@ -83,6 +83,20 @@ funcione también desde esta plataforma, al crear un Cliente o un Producto
 se agrega automáticamente una fila de homologación "1:1" (el nombre real
 apunta a sí mismo), así la venta pasa por el mismo camino ya probado.
 
+**Documentos con varios ítems (multi-línea):** una factura de venta o de
+compra real puede traer varios productos/servicios distintos. Tanto
+`sp_procesar_venta_externa` como `sp_procesar_compra_externa` soportan
+esto: si se llama más de una vez con el **mismo folio** (y el mismo
+cliente/proveedor), la segunda llamada en adelante **agrega** una línea de
+detalle más a la cabecera existente en vez de rechazarla por folio
+duplicado, acumulando los montos (neto/IVA/total) de la cabecera. Cada
+línea sigue generando su propio asiento contable, auditable por separado
+en `tbl_asientos_cabecera`, pero todas quedan asociadas al mismo folio.
+En la plataforma web esto se traduce en: para registrar una factura con
+varios ítems, se repite el formulario (Ventas o Compras) usando el mismo
+Folio y el mismo Cliente/Proveedor, cambiando el Producto/Servicio,
+Cantidad y Precio unitario en cada repetición.
+
 **Compras y Gastos** sigue el mismo patrón, a través de un nuevo stored
 procedure `sql/sp_procesar_compra_externa.sql` (análogo a
 `sp_procesar_venta_externa`, no existía antes): homologa proveedor/producto

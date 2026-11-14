@@ -132,19 +132,40 @@ BEGIN
         -- 5. Inserción Transaccional Segura hacia el Core
         BEGIN TRANSACTION;
 
+            -- v2 (Documentos Multi-Ítem): un folio de compra puede traer
+            -- varios ítems distintos (una misma OC/factura de proveedor con
+            -- varias líneas). Si el folio YA existe, se AGREGA una línea de
+            -- detalle más a esa misma cabecera (acumulando sus montos) en
+            -- vez de rechazarlo; si es la primera línea de ese folio, se
+            -- crea la cabecera. Mismo mecanismo que sp_procesar_venta_externa.
             IF EXISTS (SELECT 1 FROM tbl_ordenes_compra WHERE folio_oc = @folio_oc)
             BEGIN
-                RAISERROR('El folio "%s" ya existe en tbl_ordenes_compra. Use un folio único por documento.', 16, 1, @folio_oc);
-                ROLLBACK TRANSACTION;
-                RETURN;
+                SELECT @id_orden_compra = id_orden_compra
+                FROM tbl_ordenes_compra
+                WHERE folio_oc = @folio_oc;
+
+                IF (SELECT id_tercero FROM tbl_ordenes_compra WHERE id_orden_compra = @id_orden_compra) <> @id_tercero_oficial
+                BEGIN
+                    RAISERROR('El folio "%s" ya existe para otro proveedor. No se puede agregar un ítem con un proveedor distinto al mismo folio.', 16, 1, @folio_oc);
+                    ROLLBACK TRANSACTION;
+                    RETURN;
+                END
+
+                UPDATE tbl_ordenes_compra
+                SET monto_neto = monto_neto + @subtotal_neto,
+                    monto_iva = monto_iva + @monto_iva,
+                    monto_total = monto_total + @monto_total
+                WHERE id_orden_compra = @id_orden_compra;
             END
+            ELSE
+            BEGIN
+                SELECT @id_orden_compra = ISNULL(MAX(id_orden_compra), 0) + 1 FROM tbl_ordenes_compra;
 
-            SELECT @id_orden_compra = ISNULL(MAX(id_orden_compra), 0) + 1 FROM tbl_ordenes_compra;
-
-            INSERT INTO tbl_ordenes_compra
-                (id_orden_compra, folio_oc, id_tercero, fecha_emision, monto_neto, monto_iva, monto_total, estado_oc, id_centro_costo, id_empleado)
-            VALUES
-                (@id_orden_compra, @folio_oc, @id_tercero_oficial, @fecha_emision, @subtotal_neto, @monto_iva, @monto_total, @estado_oc, @id_centro_costo, @id_empleado);
+                INSERT INTO tbl_ordenes_compra
+                    (id_orden_compra, folio_oc, id_tercero, fecha_emision, monto_neto, monto_iva, monto_total, estado_oc, id_centro_costo, id_empleado)
+                VALUES
+                    (@id_orden_compra, @folio_oc, @id_tercero_oficial, @fecha_emision, @subtotal_neto, @monto_iva, @monto_total, @estado_oc, @id_centro_costo, @id_empleado);
+            END
 
             INSERT INTO tbl_compras_detalle
                 (id_compra_detalle, id_orden_compra, id_item, cantidad, precio_unitario, subtotal_neto)
