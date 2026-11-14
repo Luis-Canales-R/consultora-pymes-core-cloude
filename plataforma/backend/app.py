@@ -14,6 +14,7 @@ producción contra SQL Server.
 import os
 import sqlite3
 from datetime import date
+from uuid import uuid4
 
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -97,7 +98,10 @@ def listar_terceros():
 @app.route("/api/terceros", methods=["POST"])
 def crear_tercero():
     payload = request.get_json(force=True)
-    missing = require_fields(payload, ["codigo_tercero", "razon_social", "rut_dni"])
+    # codigo_tercero es opcional: si no se informa, se genera automático
+    # (T-0001, T-0002, ...) para no depender de que cada persona invente
+    # un código único a mano.
+    missing = require_fields(payload, ["razon_social", "rut_dni"])
     if missing:
         return error(missing)
     conn = db.get_conn()
@@ -105,11 +109,12 @@ def crear_tercero():
     if db.DB_ENGINE == "mssql":
         try:
             new_id = db.next_id(conn, "tbl_terceros", "id_tercero")
+            codigo_tercero = payload.get("codigo_tercero") or f"T-{new_id:04d}"
             conn.execute(
                 """INSERT INTO tbl_terceros
                    (id_tercero, codigo_tercero, id_tipo_persona, razon_social, rut_dni, id_pais, contacto_email)
                    VALUES (?, ?, 1, ?, ?, 1, ?)""",
-                (new_id, payload["codigo_tercero"], payload["razon_social"],
+                (new_id, codigo_tercero, payload["razon_social"],
                  payload["rut_dni"], payload.get("contacto_email")),
             )
             if payload.get("es_cliente"):
@@ -137,12 +142,13 @@ def crear_tercero():
         return jsonify({"id_tercero": new_id}), 201
 
     try:
+        codigo_tercero = payload.get("codigo_tercero")
         cur = conn.execute(
             """INSERT INTO tbl_terceros
                (codigo_tercero, razon_social, rut_dni, es_cliente, es_proveedor, contacto_email)
                VALUES (?, ?, ?, ?, ?, ?)""",
             (
-                payload["codigo_tercero"],
+                codigo_tercero or f"__pending_{uuid4().hex}",
                 payload["razon_social"],
                 payload["rut_dni"],
                 1 if payload.get("es_cliente") else 0,
@@ -150,8 +156,13 @@ def crear_tercero():
                 payload.get("contacto_email"),
             ),
         )
-        conn.commit()
         new_id = cur.lastrowid
+        if not codigo_tercero:
+            conn.execute(
+                "UPDATE tbl_terceros SET codigo_tercero = ? WHERE id_tercero = ?",
+                (f"T-{new_id:04d}", new_id),
+            )
+        conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.close()
         return error(f"No se pudo crear el tercero: {exc}")
@@ -186,7 +197,8 @@ def listar_productos():
 @app.route("/api/productos", methods=["POST"])
 def crear_producto():
     payload = request.get_json(force=True)
-    missing = require_fields(payload, ["sku_codigo", "nombre", "precio_venta_base"])
+    # sku_codigo es opcional: si no se informa, se genera automático.
+    missing = require_fields(payload, ["nombre", "precio_venta_base"])
     if missing:
         return error(missing)
     conn = db.get_conn()
@@ -196,12 +208,13 @@ def crear_producto():
         id_tipo_item = 2 if modo == "SERVICIO" else 1  # 1=PRODUCTO, 2=SERVICIO (cat_tipos_item)
         try:
             new_id = db.next_id(conn, "tbl_productos_servicios", "id_item")
+            sku_codigo = payload.get("sku_codigo") or f"SKU-{new_id:04d}"
             conn.execute(
                 """INSERT INTO tbl_productos_servicios
                    (id_item, sku_codigo, nombre, id_tipo_item, id_categoria_item,
                     id_unidad_medida, precio_venta_base, modo_obtencion)
                    VALUES (?, ?, ?, ?, 1, 1, ?, ?)""",
-                (new_id, payload["sku_codigo"], payload["nombre"], id_tipo_item,
+                (new_id, sku_codigo, payload["nombre"], id_tipo_item,
                  payload["precio_venta_base"], modo),
             )
             # Homologación 1:1 para que sp_procesar_venta_externa lo resuelva directo.
@@ -218,19 +231,25 @@ def crear_producto():
         return jsonify({"id_item": new_id}), 201
 
     try:
+        sku_codigo = payload.get("sku_codigo")
         cur = conn.execute(
             """INSERT INTO tbl_productos_servicios
                (sku_codigo, nombre, precio_venta_base, modo_obtencion)
                VALUES (?, ?, ?, ?)""",
             (
-                payload["sku_codigo"],
+                sku_codigo or f"__pending_{uuid4().hex}",
                 payload["nombre"],
                 payload["precio_venta_base"],
                 payload.get("modo_obtencion"),
             ),
         )
-        conn.commit()
         new_id = cur.lastrowid
+        if not sku_codigo:
+            conn.execute(
+                "UPDATE tbl_productos_servicios SET sku_codigo = ? WHERE id_item = ?",
+                (f"SKU-{new_id:04d}", new_id),
+            )
+        conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.close()
         return error(f"No se pudo crear el producto: {exc}")
