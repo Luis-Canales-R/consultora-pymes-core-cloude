@@ -68,6 +68,14 @@ def get_conn():
             f"SERVER={server};DATABASE={database};"
             f"{auth}"
             "TrustServerCertificate=yes;"
+            # MARS (Multiple Active Result Sets): sin esto, pyodbc tira
+            # "Connection is busy with results for another command" apenas
+            # se intercala una consulta (ej. buscar el nombre de un
+            # producto) con un EXEC de stored procedure sobre la misma
+            # conexión/transacción -- exactamente el patrón que usan
+            # crear_venta/crear_compra al recorrer las líneas de un
+            # documento multi-ítem.
+            "MARS_Connection=yes;"
         )
         return pyodbc.connect(conn_str)
 
