@@ -360,6 +360,15 @@ BEGIN
         PRINT 'Transacción procesada e integrada al Core exitosamente. id_venta_devengada = ' + CAST(@id_venta_devengada AS VARCHAR(20))
             + ', id_asiento = ' + CAST(@id_asiento_generado AS VARCHAR(20));
 
+        -- CAMBIO (Un Asiento por Documento): además del parámetro OUTPUT
+        -- @id_asiento_out, se expone el id_asiento como resultset propio.
+        -- Esto es necesario porque pyodbc (driver usado por la plataforma
+        -- web) no maneja de forma simple los parámetros OUTPUT de un EXEC
+        -- dentro de una sola llamada: el caller simplemente hace
+        -- "EXEC sp_procesar_venta_externa ..." y lee este SELECT con
+        -- fetchone(), sin necesitar DECLARE/OUTPUT en el lado de Python.
+        SELECT @id_asiento_generado AS id_asiento;
+
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0

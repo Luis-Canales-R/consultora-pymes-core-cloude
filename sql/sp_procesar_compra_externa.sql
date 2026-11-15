@@ -229,6 +229,11 @@ BEGIN
         PRINT 'Transacción procesada e integrada al Core exitosamente. id_orden_compra = ' + CAST(@id_orden_compra AS VARCHAR(20))
             + ', id_asiento = ' + CAST(@id_asiento_generado AS VARCHAR(20));
 
+        -- CAMBIO (Un Asiento por Documento): ver mismo comentario en
+        -- sp_procesar_venta_externa -- se expone el id_asiento como
+        -- resultset propio para que pyodbc lo lea con un fetchone() simple.
+        SELECT @id_asiento_generado AS id_asiento;
+
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0

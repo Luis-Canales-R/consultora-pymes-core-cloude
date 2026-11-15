@@ -401,14 +401,12 @@ def crear_venta():
                     raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
 
                 cur = conn.execute(
-                    """DECLARE @out_asiento INT;
-                       EXEC dbo.sp_procesar_venta_externa
+                    """EXEC dbo.sp_procesar_venta_externa
                            @folio_factura = ?, @fecha_emision = ?,
                            @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
                            @cantidad = ?, @precio_unitario = ?,
                            @estado_venta = ?, @id_centro_costo = ?,
-                           @id_asiento_existente = ?, @id_asiento_out = @out_asiento OUTPUT;
-                       SELECT @out_asiento AS id_asiento;""",
+                           @id_asiento_existente = ?""",
                     (
                         payload["folio_factura"], payload["fecha_emision"],
                         cliente["razon_social"], producto["nombre"],
@@ -418,6 +416,8 @@ def crear_venta():
                         id_asiento_actual,
                     ),
                 )
+                # El SP devuelve el id_asiento como un SELECT propio (no como
+                # parámetro OUTPUT -- pyodbc no lo maneja bien en un solo EXEC).
                 fila_asiento = cur.fetchone()
                 if fila_asiento and fila_asiento[0]:
                     id_asiento_actual = fila_asiento[0]
@@ -551,14 +551,12 @@ def crear_compra():
                     raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
 
                 cur = conn.execute(
-                    """DECLARE @out_asiento INT;
-                       EXEC dbo.sp_procesar_compra_externa
+                    """EXEC dbo.sp_procesar_compra_externa
                            @folio_oc = ?, @fecha_emision = ?,
                            @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
                            @cantidad = ?, @precio_unitario = ?,
                            @estado_oc = ?, @id_centro_costo = ?,
-                           @id_asiento_existente = ?, @id_asiento_out = @out_asiento OUTPUT;
-                       SELECT @out_asiento AS id_asiento;""",
+                           @id_asiento_existente = ?""",
                     (
                         payload["folio_oc"], payload["fecha_emision"],
                         proveedor["razon_social"], producto["nombre"],
@@ -568,6 +566,8 @@ def crear_compra():
                         id_asiento_actual,
                     ),
                 )
+                # El SP devuelve el id_asiento como un SELECT propio (no como
+                # parámetro OUTPUT -- pyodbc no lo maneja bien en un solo EXEC).
                 fila_asiento = cur.fetchone()
                 if fila_asiento and fila_asiento[0]:
                     id_asiento_actual = fila_asiento[0]
