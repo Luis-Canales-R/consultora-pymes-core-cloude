@@ -63,7 +63,16 @@ CREATE OR ALTER PROCEDURE sp_procesar_venta_externa
     @precio_unitario DECIMAL(18,2),
     @estado_venta VARCHAR(30),
     @id_centro_costo INT = NULL,
-    @id_empleado INT = NULL
+    @id_empleado INT = NULL,
+    -- CAMBIO (Un Asiento por Documento): si @id_asiento_existente viene
+    -- informado, esta línea se agrega al asiento ya creado por una línea
+    -- anterior del mismo folio (en vez de crear un asiento nuevo). El
+    -- llamador debe guardar el valor devuelto en @id_asiento_out y
+    -- reenviarlo como @id_asiento_existente en la siguiente línea del
+    -- mismo documento -- así un folio con N ítems queda con UN solo
+    -- asiento de N*2 (o más) líneas, en vez de N asientos separados.
+    @id_asiento_existente INT = NULL,
+    @id_asiento_out INT = NULL OUTPUT
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -342,7 +351,10 @@ BEGIN
                 @glosa_general = @glosa_tmp,
                 @periodo_contable = @periodo_tmp,
                 @lineas = @lineas_venta_externa,
+                @id_asiento_existente = @id_asiento_existente,
                 @id_asiento_out = @id_asiento_generado OUTPUT;
+
+            SET @id_asiento_out = @id_asiento_generado;
 
         COMMIT TRANSACTION;
         PRINT 'Transacción procesada e integrada al Core exitosamente. id_venta_devengada = ' + CAST(@id_venta_devengada AS VARCHAR(20))

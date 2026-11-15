@@ -54,7 +54,11 @@ CREATE OR ALTER PROCEDURE sp_procesar_compra_externa
     @precio_unitario DECIMAL(18,2),
     @estado_oc VARCHAR(30),
     @id_centro_costo INT = NULL,
-    @id_empleado INT = NULL
+    @id_empleado INT = NULL,
+    -- CAMBIO (Un Asiento por Documento): mismo mecanismo que
+    -- sp_procesar_venta_externa -- ver comentario allá.
+    @id_asiento_existente INT = NULL,
+    @id_asiento_out INT = NULL OUTPUT
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -216,7 +220,10 @@ BEGIN
                 @glosa_general = @glosa_tmp,
                 @periodo_contable = @periodo_tmp,
                 @lineas = @lineas_compra_externa,
+                @id_asiento_existente = @id_asiento_existente,
                 @id_asiento_out = @id_asiento_generado OUTPUT;
+
+            SET @id_asiento_out = @id_asiento_generado;
 
         COMMIT TRANSACTION;
         PRINT 'Transacción procesada e integrada al Core exitosamente. id_orden_compra = ' + CAST(@id_orden_compra AS VARCHAR(20))

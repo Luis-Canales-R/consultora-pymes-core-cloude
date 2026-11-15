@@ -385,6 +385,14 @@ def crear_venta():
             if not cliente:
                 return error("Cliente no encontrado.")
 
+            # Todas las líneas de este folio se enlazan al MISMO asiento
+            # contable (patrón ERP real: un documento = un asiento, con
+            # varias líneas) -- ver sp_registrar_asiento_contable. La
+            # primera línea crea el asiento (id_asiento_existente = NULL);
+            # cada línea siguiente reenvía el id_asiento devuelto por la
+            # anterior, para que se le agreguen sus propias líneas contables
+            # en vez de crear un asiento nuevo.
+            id_asiento_actual = None
             for i, linea in enumerate(payload["lineas"], start=1):
                 producto = db.fetch_one_dict(
                     conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (linea["id_item"],)
@@ -392,20 +400,27 @@ def crear_venta():
                 if not producto:
                     raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
 
-                conn.execute(
-                    """EXEC dbo.sp_procesar_venta_externa
+                cur = conn.execute(
+                    """DECLARE @out_asiento INT;
+                       EXEC dbo.sp_procesar_venta_externa
                            @folio_factura = ?, @fecha_emision = ?,
                            @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
                            @cantidad = ?, @precio_unitario = ?,
-                           @estado_venta = ?, @id_centro_costo = ?""",
+                           @estado_venta = ?, @id_centro_costo = ?,
+                           @id_asiento_existente = ?, @id_asiento_out = @out_asiento OUTPUT;
+                       SELECT @out_asiento AS id_asiento;""",
                     (
                         payload["folio_factura"], payload["fecha_emision"],
                         cliente["razon_social"], producto["nombre"],
                         float(linea["cantidad"]), float(linea["precio_unitario"]),
                         payload.get("estado_venta", "DEVENGADO"),
                         payload.get("id_centro_costo"),
+                        id_asiento_actual,
                     ),
                 )
+                fila_asiento = cur.fetchone()
+                if fila_asiento and fila_asiento[0]:
+                    id_asiento_actual = fila_asiento[0]
 
             conn.commit()
             resultado = db.fetch_one_dict(
@@ -520,6 +535,14 @@ def crear_compra():
             if not proveedor:
                 return error("Proveedor no encontrado.")
 
+            # Todas las líneas de este folio se enlazan al MISMO asiento
+            # contable (patrón ERP real: un documento = un asiento, con
+            # varias líneas) -- ver sp_registrar_asiento_contable. La
+            # primera línea crea el asiento (id_asiento_existente = NULL);
+            # cada línea siguiente reenvía el id_asiento devuelto por la
+            # anterior, para que se le agreguen sus propias líneas contables
+            # en vez de crear un asiento nuevo.
+            id_asiento_actual = None
             for i, linea in enumerate(payload["lineas"], start=1):
                 producto = db.fetch_one_dict(
                     conn, "SELECT nombre FROM tbl_productos_servicios WHERE id_item = ?", (linea["id_item"],)
@@ -527,20 +550,27 @@ def crear_compra():
                 if not producto:
                     raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
 
-                conn.execute(
-                    """EXEC dbo.sp_procesar_compra_externa
+                cur = conn.execute(
+                    """DECLARE @out_asiento INT;
+                       EXEC dbo.sp_procesar_compra_externa
                            @folio_oc = ?, @fecha_emision = ?,
                            @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
                            @cantidad = ?, @precio_unitario = ?,
-                           @estado_oc = ?, @id_centro_costo = ?""",
+                           @estado_oc = ?, @id_centro_costo = ?,
+                           @id_asiento_existente = ?, @id_asiento_out = @out_asiento OUTPUT;
+                       SELECT @out_asiento AS id_asiento;""",
                     (
                         payload["folio_oc"], payload["fecha_emision"],
                         proveedor["razon_social"], producto["nombre"],
                         float(linea["cantidad"]), float(linea["precio_unitario"]),
                         payload.get("estado_oc", "RECIBIDA"),
                         payload.get("id_centro_costo"),
+                        id_asiento_actual,
                     ),
                 )
+                fila_asiento = cur.fetchone()
+                if fila_asiento and fila_asiento[0]:
+                    id_asiento_actual = fila_asiento[0]
 
             conn.commit()
             resultado = db.fetch_one_dict(

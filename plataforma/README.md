@@ -84,18 +84,36 @@ se agrega automáticamente una fila de homologación "1:1" (el nombre real
 apunta a sí mismo), así la venta pasa por el mismo camino ya probado.
 
 **Documentos con varios ítems (multi-línea):** una factura de venta o de
-compra real puede traer varios productos/servicios distintos. Tanto
-`sp_procesar_venta_externa` como `sp_procesar_compra_externa` soportan
-esto: si se llama más de una vez con el **mismo folio** (y el mismo
-cliente/proveedor), la segunda llamada en adelante **agrega** una línea de
-detalle más a la cabecera existente en vez de rechazarla por folio
-duplicado, acumulando los montos (neto/IVA/total) de la cabecera. Cada
-línea sigue generando su propio asiento contable, auditable por separado
-en `tbl_asientos_cabecera`, pero todas quedan asociadas al mismo folio.
-En la plataforma web esto se traduce en: para registrar una factura con
-varios ítems, se repite el formulario (Ventas o Compras) usando el mismo
-Folio y el mismo Cliente/Proveedor, cambiando el Producto/Servicio,
-Cantidad y Precio unitario en cada repetición.
+compra real puede traer varios productos/servicios distintos. En la
+plataforma web esto se registra como un **documento con líneas**, igual
+que en un ERP real: se llena el encabezado (folio, cliente/proveedor,
+centro de costo, fecha, estado) una sola vez, se agregan uno a uno los
+ítems (producto, cantidad, precio unitario) a una tabla de líneas, y un
+único botón "Registrar" envía todo de una vez.
+
+A nivel de base de datos, el frontend arma el arreglo `lineas` y el
+backend (`crear_venta` / `crear_compra` en `app.py`) llama a
+`sp_procesar_venta_externa` / `sp_procesar_compra_externa` **una vez por
+línea**, todas sobre la misma conexión/transacción (o se registran todas,
+o no se registra ninguna). Cada llamada agrega su propia fila de detalle
+a la cabecera (creándola en la primera línea, acumulando montos en las
+siguientes) — eso no cambió. Lo que sí se agregó es el enlace de
+**un solo asiento contable por documento**: la primera línea crea el
+asiento (vía `sp_registrar_asiento_contable`) y devuelve su `id_asiento`;
+cada línea siguiente reenvía ese mismo `id_asiento` como
+`@id_asiento_existente`, por lo que sus líneas contables se agregan al
+asiento ya existente en vez de crear uno nuevo. Resultado: un folio con 3
+ítems queda con **un solo asiento** en `tbl_asientos_cabecera` (con todas
+las líneas Debe/Haber de los 3 ítems en `tbl_asientos_detalle`), igual que
+en SAP/NetSuite/Odoo/Dynamics 365 o los ERP chilenos (Defontana/Nubox/
+Bsale) — no con un asiento por cada ítem.
+
+**IMPORTANTE — ejecutar antes de probar esto:** además de
+`sql/sp_procesar_compra_externa.sql` y `sql/sp_procesar_transaccion_externa.sql`
+(que ya tenían que estar desplegados), ahora también hay que desplegar
+`sql/sp_registrar_asiento_contable.sql` (archivo nuevo, `CREATE OR ALTER`,
+no borra nada) — agrega el parámetro `@id_asiento_existente` al SP central
+de contabilización que usan ambos módulos.
 
 **Compras y Gastos** sigue el mismo patrón, a través de un nuevo stored
 procedure `sql/sp_procesar_compra_externa.sql` (análogo a
