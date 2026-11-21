@@ -84,6 +84,14 @@ h2 { margin-top: 0; }
   margin-bottom: 24px;
 }
 .panel h3 { margin-top: 0; }
+.panel h4 { margin: 20px 0 8px; font-size: 14px; color: var(--quiet); }
+
+.table-scroll { overflow-x: auto; }
+.table-scroll table { min-width: 820px; }
+
+.var-positiva { color: var(--good); }
+.var-negativa { color: #c23a3a; }
+.var-sindata { color: var(--quiet); }
 
 .form-grid {
   display: grid;

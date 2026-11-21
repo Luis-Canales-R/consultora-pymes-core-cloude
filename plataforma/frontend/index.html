@@ -16,6 +16,7 @@
       <button class="nav-btn" data-view="compras">📦 Compras y Gastos</button>
       <button class="nav-btn" data-view="caja">💰 Caja</button>
       <button class="nav-btn" data-view="catalogos">📇 Catálogos</button>
+      <button class="nav-btn" data-view="informes">📈 Informes</button>
     </nav>
     <p class="sidebar-foot">MVP local · SQLite</p>
   </aside>
@@ -269,6 +270,81 @@
           <thead><tr><th>Nombre</th></tr></thead>
           <tbody></tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- INFORMES -->
+    <section id="view-informes" class="view">
+      <h2>Informes Financieros Avanzados</h2>
+      <p class="hint" id="informes-modo-demo" style="display:none">
+        Estos informes requieren un plan de cuentas real y no están disponibles en modo demo (SQLite).
+        Corre la plataforma con <code>DB_ENGINE=mssql</code> para verlos.
+      </p>
+
+      <div class="panel" id="panel-comparacion-periodos">
+        <h3>Comparación entre Periodos</h3>
+        <table class="data-table" id="tabla-comparacion-mensual">
+          <thead>
+            <tr>
+              <th>Mes</th>
+              <th>Ingresos</th>
+              <th>Costos y Gastos</th>
+              <th>Resultado</th>
+              <th>Var. Mes Anterior</th>
+              <th>Var. Mismo Mes Año Anterior</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+
+        <h4>Acumulado Año a la Fecha (YTD)</h4>
+        <table class="data-table" id="tabla-comparacion-ytd">
+          <thead>
+            <tr>
+              <th>Año (hasta mes)</th>
+              <th>Ingresos YTD</th>
+              <th>Costos y Gastos YTD</th>
+              <th>Resultado YTD</th>
+              <th>Var. vs. mismo periodo año anterior</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="panel" id="panel-balance-8-columnas">
+        <h3>Balance de 8 Columnas</h3>
+        <p class="hint">
+          Hoja de trabajo tradicional, acumulada a la fecha (igual alcance que el Balance General).
+          El Patrimonio se muestra en su propia columna en vez de fusionarlo con Pasivo.
+        </p>
+        <div class="table-scroll">
+          <table class="data-table" id="tabla-balance-8-columnas">
+            <thead>
+              <tr>
+                <th rowspan="2">Código</th>
+                <th rowspan="2">Cuenta</th>
+                <th colspan="2">Sumas</th>
+                <th colspan="2">Saldos</th>
+                <th colspan="3">Inventario (Balance)</th>
+                <th colspan="2">Pérdidas y Ganancias</th>
+              </tr>
+              <tr>
+                <th>Debe</th>
+                <th>Haber</th>
+                <th>Deudor</th>
+                <th>Acreedor</th>
+                <th>Activo</th>
+                <th>Pasivo</th>
+                <th>Patrimonio</th>
+                <th>Pérdida</th>
+                <th>Ganancia</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+            <tfoot></tfoot>
+          </table>
+        </div>
       </div>
     </section>
 

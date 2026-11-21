@@ -909,6 +909,174 @@ def dashboard():
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Informes Financieros Avanzados (Controller): Balance de 8 Columnas y
+# Comparación entre Periodos. Solo tienen sentido en modo mssql, porque
+# dependen de un plan de cuentas real (cat_plan_cuentas) que el prototipo
+# SQLite no modela.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/informes/balance-8-columnas", methods=["GET"])
+def informe_balance_ocho_columnas():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True, "cuentas": []})
+
+    conn = db.get_conn()
+    cuentas = db.fetch_dicts(
+        conn,
+        """SELECT codigo_cuenta, nombre_cuenta, tipo_cuenta, naturaleza,
+                  suma_debe, suma_haber, saldo_deudor, saldo_acreedor,
+                  inventario_activo, inventario_pasivo, inventario_patrimonio,
+                  perdida, ganancia
+           FROM vw_balance_ocho_columnas
+           ORDER BY codigo_cuenta""",
+    )
+    conn.close()
+
+    totales = {
+        "suma_debe": 0.0, "suma_haber": 0.0,
+        "saldo_deudor": 0.0, "saldo_acreedor": 0.0,
+        "inventario_activo": 0.0, "inventario_pasivo": 0.0, "inventario_patrimonio": 0.0,
+        "perdida": 0.0, "ganancia": 0.0,
+    }
+    for c in cuentas:
+        for clave in totales:
+            totales[clave] += float(c[clave] or 0)
+
+    return jsonify({"modo_demo": False, "cuentas": cuentas, "totales": totales})
+
+
+def _mes_anterior(periodo):
+    """'YYYY-MM' -> 'YYYY-MM' del mes calendario inmediatamente anterior."""
+    anio, mes = int(periodo[:4]), int(periodo[5:7])
+    if mes == 1:
+        anio, mes = anio - 1, 12
+    else:
+        mes -= 1
+    return f"{anio:04d}-{mes:02d}"
+
+
+def _mismo_mes_anio_anterior(periodo):
+    """'YYYY-MM' -> mismo mes, un año antes."""
+    anio, mes = int(periodo[:4]), int(periodo[5:7])
+    return f"{anio - 1:04d}-{mes:02d}"
+
+
+def _variacion(actual, base):
+    """Variación absoluta y porcentual de 'actual' respecto a 'base'.
+    Devuelve None en ambos campos si no hay dato base con que comparar
+    (periodo inexistente), y porcentual None si la base es 0 (evita
+    división por cero cuando se parte de cero)."""
+    if base is None:
+        return {"absoluta": None, "porcentual": None}
+    absoluta = actual - base
+    porcentual = (absoluta / base * 100.0) if base != 0 else None
+    return {"absoluta": absoluta, "porcentual": porcentual}
+
+
+def calcular_comparacion_periodos(filas):
+    """Recibe una lista de dicts {mes, ingresos, costos_gastos, resultado}
+    (uno por periodo 'YYYY-MM', ya agregados) y agrega, a cada uno, sus
+    variaciones mes-a-mes (MoM) y respecto al mismo mes del año anterior
+    (YoY). También arma el acumulado año-a-la-fecha (YTD) por año,
+    comparado contra el mismo rango del año anterior. Es una función pura
+    (sin acceso a BD) para poder testearla directo con datos de ejemplo.
+    """
+    por_mes = {f["mes"]: f for f in filas}
+
+    periodos = []
+    for fila in sorted(filas, key=lambda f: f["mes"]):
+        mes = fila["mes"]
+        anterior = por_mes.get(_mes_anterior(mes))
+        mismo_anio_anterior = por_mes.get(_mismo_mes_anio_anterior(mes))
+
+        entrada = dict(fila)
+        entrada["var_mom"] = {
+            "ingresos": _variacion(fila["ingresos"], anterior["ingresos"] if anterior else None),
+            "costos_gastos": _variacion(fila["costos_gastos"], anterior["costos_gastos"] if anterior else None),
+            "resultado": _variacion(fila["resultado"], anterior["resultado"] if anterior else None),
+        }
+        entrada["var_yoy"] = {
+            "ingresos": _variacion(fila["ingresos"], mismo_anio_anterior["ingresos"] if mismo_anio_anterior else None),
+            "costos_gastos": _variacion(fila["costos_gastos"], mismo_anio_anterior["costos_gastos"] if mismo_anio_anterior else None),
+            "resultado": _variacion(fila["resultado"], mismo_anio_anterior["resultado"] if mismo_anio_anterior else None),
+        }
+        periodos.append(entrada)
+
+    # Acumulado Año a la Fecha (YTD): para cada año presente, se acumula
+    # Enero..mes_X y se compara contra el mismo rango (Enero..mes_X) del
+    # año anterior, mes a mes (no contra el año completo anterior).
+    anios = sorted({int(f["mes"][:4]) for f in filas})
+    ytd = []
+    for anio in anios:
+        meses_anio = sorted(m for m in por_mes if m.startswith(f"{anio:04d}-"))
+        acumulado = {"ingresos": 0.0, "costos_gastos": 0.0, "resultado": 0.0}
+        acumulado_anio_anterior = {"ingresos": 0.0, "costos_gastos": 0.0, "resultado": 0.0}
+        hay_anio_anterior = True
+        for m in meses_anio:
+            for clave in acumulado:
+                acumulado[clave] += por_mes[m][clave]
+            previo = por_mes.get(_mismo_mes_anio_anterior(m))
+            if previo is None:
+                hay_anio_anterior = False
+                continue
+            for clave in acumulado_anio_anterior:
+                acumulado_anio_anterior[clave] += previo[clave]
+
+        ultimo_mes = meses_anio[-1][5:7] if meses_anio else None
+        entrada_ytd = {
+            "anio": anio,
+            "hasta_mes": ultimo_mes,
+            "ingresos_ytd": acumulado["ingresos"],
+            "costos_gastos_ytd": acumulado["costos_gastos"],
+            "resultado_ytd": acumulado["resultado"],
+        }
+        if hay_anio_anterior and meses_anio:
+            entrada_ytd["var_yoy_ytd"] = {
+                "ingresos": _variacion(acumulado["ingresos"], acumulado_anio_anterior["ingresos"]),
+                "costos_gastos": _variacion(acumulado["costos_gastos"], acumulado_anio_anterior["costos_gastos"]),
+                "resultado": _variacion(acumulado["resultado"], acumulado_anio_anterior["resultado"]),
+            }
+        else:
+            entrada_ytd["var_yoy_ytd"] = {
+                "ingresos": {"absoluta": None, "porcentual": None},
+                "costos_gastos": {"absoluta": None, "porcentual": None},
+                "resultado": {"absoluta": None, "porcentual": None},
+            }
+        ytd.append(entrada_ytd)
+
+    return {"periodos": periodos, "ytd": ytd}
+
+
+@app.route("/api/informes/comparacion-periodos", methods=["GET"])
+def informe_comparacion_periodos():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True, "periodos": [], "ytd": []})
+
+    conn = db.get_conn()
+    filas_er = db.fetch_dicts(
+        conn,
+        """SELECT periodo_contable AS mes, tipo_cuenta, COALESCE(SUM(monto_periodo), 0) AS total
+           FROM vw_estado_resultados
+           GROUP BY periodo_contable, tipo_cuenta""",
+    )
+    conn.close()
+
+    por_mes = {}
+    for f in filas_er:
+        fila = por_mes.setdefault(f["mes"], {"mes": f["mes"], "ingresos": 0.0, "costos_gastos": 0.0})
+        if f["tipo_cuenta"] == "INGRESO":
+            fila["ingresos"] += float(f["total"] or 0)
+        elif f["tipo_cuenta"] in ("COSTO", "GASTO"):
+            fila["costos_gastos"] += float(f["total"] or 0)
+    for fila in por_mes.values():
+        fila["resultado"] = fila["ingresos"] - fila["costos_gastos"]
+
+    resultado = calcular_comparacion_periodos(list(por_mes.values()))
+    return jsonify({"modo_demo": False, **resultado})
+
+
 if __name__ == "__main__":
     db.init_db()
     port = int(os.environ.get("PORT", 5000))

@@ -78,6 +78,7 @@ function initNav() {
       if (btn.dataset.view === "compras") loadCompras();
       if (btn.dataset.view === "caja") loadCaja();
       if (btn.dataset.view === "catalogos") loadCatalogos();
+      if (btn.dataset.view === "informes") loadInformes();
     });
   });
 }
@@ -570,6 +571,104 @@ function initFormCentro() {
       showMsg("msg-centro", err.message, false);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Informes Financieros Avanzados (Controller)
+// ---------------------------------------------------------------------------
+
+function fmtPct(n) {
+  if (n === null || n === undefined) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+}
+
+function fmtVarCelda(variacion) {
+  if (!variacion || variacion.absoluta === null || variacion.absoluta === undefined) {
+    return `<span class="var-sindata">Sin dato previo</span>`;
+  }
+  const clase = variacion.absoluta > 0 ? "var-positiva" : variacion.absoluta < 0 ? "var-negativa" : "";
+  return `<span class="${clase}">${fmtMoney(variacion.absoluta)} (${fmtPct(variacion.porcentual)})</span>`;
+}
+
+async function loadInformes() {
+  const [balance, comparacion] = await Promise.all([
+    apiGet("/informes/balance-8-columnas"),
+    apiGet("/informes/comparacion-periodos"),
+  ]);
+
+  const modoDemo = balance.modo_demo || comparacion.modo_demo;
+  document.getElementById("informes-modo-demo").style.display = modoDemo ? "" : "none";
+  document.getElementById("panel-comparacion-periodos").style.display = modoDemo ? "none" : "";
+  document.getElementById("panel-balance-8-columnas").style.display = modoDemo ? "none" : "";
+  if (modoDemo) return;
+
+  // --- Comparación entre periodos ---
+  const tbodyMensual = document.querySelector("#tabla-comparacion-mensual tbody");
+  tbodyMensual.innerHTML = "";
+  comparacion.periodos.forEach((p) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${p.mes}</td>
+      <td>${fmtMoney(p.ingresos)}</td>
+      <td>${fmtMoney(p.costos_gastos)}</td>
+      <td>${fmtMoney(p.resultado)}</td>
+      <td>${fmtVarCelda(p.var_mom.resultado)}</td>
+      <td>${fmtVarCelda(p.var_yoy.resultado)}</td>
+    `;
+    tbodyMensual.appendChild(tr);
+  });
+
+  const tbodyYtd = document.querySelector("#tabla-comparacion-ytd tbody");
+  tbodyYtd.innerHTML = "";
+  comparacion.ytd.forEach((y) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${y.anio} (hasta ${y.hasta_mes})</td>
+      <td>${fmtMoney(y.ingresos_ytd)}</td>
+      <td>${fmtMoney(y.costos_gastos_ytd)}</td>
+      <td>${fmtMoney(y.resultado_ytd)}</td>
+      <td>${fmtVarCelda(y.var_yoy_ytd.resultado)}</td>
+    `;
+    tbodyYtd.appendChild(tr);
+  });
+
+  // --- Balance de 8 Columnas ---
+  const tbodyBalance = document.querySelector("#tabla-balance-8-columnas tbody");
+  tbodyBalance.innerHTML = "";
+  balance.cuentas.forEach((c) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${c.codigo_cuenta}</td>
+      <td>${c.nombre_cuenta}</td>
+      <td>${fmtMoney(c.suma_debe)}</td>
+      <td>${fmtMoney(c.suma_haber)}</td>
+      <td>${fmtMoney(c.saldo_deudor)}</td>
+      <td>${fmtMoney(c.saldo_acreedor)}</td>
+      <td>${fmtMoney(c.inventario_activo)}</td>
+      <td>${fmtMoney(c.inventario_pasivo)}</td>
+      <td>${fmtMoney(c.inventario_patrimonio)}</td>
+      <td>${fmtMoney(c.perdida)}</td>
+      <td>${fmtMoney(c.ganancia)}</td>
+    `;
+    tbodyBalance.appendChild(tr);
+  });
+
+  const t = balance.totales;
+  const tfoot = document.querySelector("#tabla-balance-8-columnas tfoot");
+  tfoot.innerHTML = `
+    <tr style="font-weight:600">
+      <td colspan="2">Totales</td>
+      <td>${fmtMoney(t.suma_debe)}</td>
+      <td>${fmtMoney(t.suma_haber)}</td>
+      <td>${fmtMoney(t.saldo_deudor)}</td>
+      <td>${fmtMoney(t.saldo_acreedor)}</td>
+      <td>${fmtMoney(t.inventario_activo)}</td>
+      <td>${fmtMoney(t.inventario_pasivo)}</td>
+      <td>${fmtMoney(t.inventario_patrimonio)}</td>
+      <td>${fmtMoney(t.perdida)}</td>
+      <td>${fmtMoney(t.ganancia)}</td>
+    </tr>
+  `;
 }
 
 // ---------------------------------------------------------------------------

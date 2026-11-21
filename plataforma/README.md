@@ -206,9 +206,46 @@ que ya consumía `app.js`), agregando solo las tres claves nuevas del
 Balance General; el modo SQLite sigue calculando como antes, sin tocar
 ese código.
 
+### Informes Financieros Avanzados (Controller)
+
+Nueva pestaña "Informes", con dos reportes que no requieren cambios de
+esquema (se construyeron primero por eso):
+
+- **Balance de 8 Columnas**: hoja de trabajo tradicional (Sumas Debe/Haber,
+  Saldos Deudor/Acreedor, Inventario Activo/Pasivo/Patrimonio, Pérdida/
+  Ganancia), acumulada a la fecha. Vista nueva `vw_balance_ocho_columnas`
+  en `sql/crear_vista_balance_ocho_columnas.sql` (reutiliza la misma
+  lógica de saldo por naturaleza de `vw_balance_general`). Adaptación
+  respecto del formato clásico: el Patrimonio queda en su propia columna
+  en vez de fusionarlo con Pasivo.
+- **Comparación entre Periodos**: variación mes-a-mes (MoM), contra el
+  mismo mes del año anterior (YoY), y acumulado Año a la Fecha (YTD) vs.
+  el mismo rango del año anterior — para Ingresos, Costos y Gastos, y
+  Resultado. Se calcula 100% en Python (`calcular_comparacion_periodos`
+  en `app.py`, función pura sin acceso a BD, testeada con datos
+  sintéticos cubriendo primer periodo sin histórico, cruce de año y YTD
+  parcial) a partir de `vw_estado_resultados` agrupada por
+  `periodo_contable` — sin vista ni columna nueva.
+
+Ambos endpoints (`GET /api/informes/balance-8-columnas`,
+`GET /api/informes/comparacion-periodos`) devuelven `modo_demo: true` y
+datos vacíos en SQLite, porque dependen de un plan de cuentas real que el
+prototipo no modela; el frontend oculta los paneles automáticamente en
+ese caso.
+
+**IMPORTANTE — ejecutar antes de usar Informes:**
+`sql/crear_vista_balance_ocho_columnas.sql` debe desplegarse en SQL
+Server (archivo nuevo).
+
 ### Pendiente
 
 - Flujo de Caja Proyectado (control de liquidez): no implementado todavía
   — ver el documento de plan del proyecto para el alcance y los pasos
   propuestos (requiere resolver la trazabilidad Caja↔documento y agregar
   fecha de vencimiento de pago a Compras).
+- Informes Financieros Avanzados — KPIs de Liquidez/Endeudamiento/
+  Rentabilidad, EBITDA y el Estado de Resultados en cascada: pendientes,
+  requieren agregar `clasificacion_corriente` y `subclasificacion_resultado`
+  a `cat_plan_cuentas` (ver plan del proyecto). El formato de presentación
+  SII queda pendiente de que el contador de la empresa confirme el
+  régimen tributario y los códigos vigentes del Formulario 22.
