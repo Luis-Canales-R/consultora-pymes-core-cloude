@@ -1077,6 +1077,119 @@ def informe_comparacion_periodos():
     return jsonify({"modo_demo": False, **resultado})
 
 
+
+# ---------------------------------------------------------------------------
+# Informes Financieros Avanzados: KPIs de Liquidez, Apalancamiento y
+# Rentabilidad. Requiere cat_plan_cuentas.clasificacion_corriente
+# (sql/agregar_clasificacion_corriente.sql) para la parte de Liquidez.
+# ---------------------------------------------------------------------------
+
+def _razon(numerador, denominador):
+    """Division segura: None si el denominador es 0 (ratio no definido),
+    en vez de reventar o devolver infinito."""
+    if not denominador:
+        return None
+    return numerador / denominador
+
+
+def _pct(numerador, denominador):
+    r = _razon(numerador, denominador)
+    return None if r is None else r * 100.0
+
+
+def calcular_kpis(cuentas_balance, totales_resultado):
+    """KPIs estandar de controller (formulas de finanzas corporativas, no
+    criterios propios). cuentas_balance: lista de dicts {codigo_cuenta,
+    tipo_cuenta, clasificacion_corriente, saldo} (una fila por cuenta
+    imputable de Balance, ej. desde vw_balance_general). totales_resultado:
+    dict {'INGRESO':..,'COSTO':..,'GASTO':..} ya agregados (ej. desde
+    vw_estado_resultados). Funcion pura, testeable sin DB.
+
+    'Inventario', para la Prueba Acida, se identifica por el codigo_cuenta
+    del grupo 'Existencias e Inventarios' (1.1.04.*) del plan de cuentas
+    estandar cargado -- una convencion de ESTE plan de cuentas, no un
+    estandar universal, documentada aqui por si el plan de cuentas cambia.
+    """
+    activo_total = sum(c["saldo"] for c in cuentas_balance if c["tipo_cuenta"] == "ACTIVO")
+    pasivo_total = sum(c["saldo"] for c in cuentas_balance if c["tipo_cuenta"] == "PASIVO")
+    patrimonio_total = sum(c["saldo"] for c in cuentas_balance if c["tipo_cuenta"] == "PATRIMONIO")
+    activo_corriente = sum(
+        c["saldo"] for c in cuentas_balance
+        if c["tipo_cuenta"] == "ACTIVO" and c.get("clasificacion_corriente") is True
+    )
+    pasivo_corriente = sum(
+        c["saldo"] for c in cuentas_balance
+        if c["tipo_cuenta"] == "PASIVO" and c.get("clasificacion_corriente") is True
+    )
+    inventario = sum(
+        c["saldo"] for c in cuentas_balance
+        if str(c.get("codigo_cuenta") or "").startswith("1.1.04.")
+    )
+
+    ingresos = totales_resultado.get("INGRESO", 0.0)
+    costo = totales_resultado.get("COSTO", 0.0)
+    gasto = totales_resultado.get("GASTO", 0.0)
+    resultado_neto = ingresos - costo - gasto
+
+    return {
+        "liquidez": {
+            "activo_corriente": activo_corriente,
+            "pasivo_corriente": pasivo_corriente,
+            "inventario": inventario,
+            "capital_trabajo": activo_corriente - pasivo_corriente,
+            "razon_corriente": _razon(activo_corriente, pasivo_corriente),
+            "prueba_acida": _razon(activo_corriente - inventario, pasivo_corriente),
+        },
+        "apalancamiento": {
+            "activo_total": activo_total,
+            "pasivo_total": pasivo_total,
+            "patrimonio_total": patrimonio_total,
+            "endeudamiento": _razon(pasivo_total, activo_total),
+            "deuda_patrimonio": _razon(pasivo_total, patrimonio_total),
+        },
+        "rentabilidad": {
+            "ingresos": ingresos,
+            "costo": costo,
+            "gasto": gasto,
+            "resultado_neto": resultado_neto,
+            "margen_bruto_pct": _pct(ingresos - costo, ingresos),
+            "margen_neto_pct": _pct(resultado_neto, ingresos),
+            "roe_pct": _pct(resultado_neto, patrimonio_total),
+            "roa_pct": _pct(resultado_neto, activo_total),
+        },
+    }
+
+
+@app.route("/api/informes/kpis", methods=["GET"])
+def informe_kpis():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True})
+
+    conn = db.get_conn()
+    cuentas_balance = db.fetch_dicts(
+        conn,
+        """SELECT codigo_cuenta, tipo_cuenta, clasificacion_corriente, saldo
+           FROM vw_balance_general""",
+    )
+    filas_resultado = db.fetch_dicts(
+        conn,
+        """SELECT tipo_cuenta, COALESCE(SUM(monto_periodo), 0) AS total
+           FROM vw_estado_resultados
+           GROUP BY tipo_cuenta""",
+    )
+    conn.close()
+
+    for c in cuentas_balance:
+        valor = c.get("clasificacion_corriente")
+        c["clasificacion_corriente"] = None if valor is None else bool(valor)
+        c["saldo"] = float(c["saldo"] or 0)
+
+    totales_resultado = {f["tipo_cuenta"]: float(f["total"] or 0) for f in filas_resultado}
+
+    kpis = calcular_kpis(cuentas_balance, totales_resultado)
+    return jsonify({"modo_demo": False, **kpis})
+
+
 if __name__ == "__main__":
     db.init_db()
     port = int(os.environ.get("PORT", 5000))

@@ -227,15 +227,43 @@ esquema (se construyeron primero por eso):
   parcial) a partir de `vw_estado_resultados` agrupada por
   `periodo_contable` — sin vista ni columna nueva.
 
-Ambos endpoints (`GET /api/informes/balance-8-columnas`,
-`GET /api/informes/comparacion-periodos`) devuelven `modo_demo: true` y
-datos vacíos en SQLite, porque dependen de un plan de cuentas real que el
-prototipo no modela; el frontend oculta los paneles automáticamente en
-ese caso.
+- **KPIs Estándar (Liquidez, Apalancamiento, Rentabilidad)**: Razón
+  Corriente, Prueba Ácida, Capital de Trabajo; Endeudamiento, Deuda/
+  Patrimonio; Margen Bruto, Margen Neto, ROE, ROA — fórmulas estándar de
+  finanzas corporativas. Requirió una columna nueva,
+  `cat_plan_cuentas.clasificacion_corriente` (migración aditiva en
+  `sql/agregar_clasificacion_corriente.sql`), para poder separar Activo/
+  Pasivo Corriente de No Corriente. Esa columna es **COMPUTED**, derivada
+  directamente del `codigo_cuenta` (`1.1.x`/`2.1.x` = Corriente,
+  `1.2.x`/`2.2.x` = No Corriente — la distinción ya existía implícita en
+  la jerarquía del plan de cuentas estándar cargado), así que no necesitó
+  ningún backfill manual ni se puede desincronizar con cuentas nuevas que
+  seguían la misma convención de código. Calculado en
+  `calcular_kpis` (`app.py`, función pura, testeada con datos sintéticos
+  y con los números reales ya validados del Dashboard, incluyendo el caso
+  límite Patrimonio = 0 → ratios que lo dividen quedan en `None`/"N/D" en
+  vez de reventar). El "Inventario" para la Prueba Ácida se identifica
+  por el grupo `1.1.04.*` del plan de cuentas (Existencias e
+  Inventarios) — una convención de este plan de cuentas específico, no
+  un estándar universal.
+
+Los tres endpoints (`GET /api/informes/balance-8-columnas`,
+`GET /api/informes/comparacion-periodos`, `GET /api/informes/kpis`)
+devuelven `modo_demo: true` y datos vacíos en SQLite, porque dependen de
+un plan de cuentas real que el prototipo no modela; el frontend oculta
+los paneles automáticamente en ese caso.
 
 **IMPORTANTE — ejecutar antes de usar Informes:**
-`sql/crear_vista_balance_ocho_columnas.sql` debe desplegarse en SQL
-Server (archivo nuevo).
+`sql/crear_vista_balance_ocho_columnas.sql` y
+`sql/agregar_clasificacion_corriente.sql` deben desplegarse en SQL
+Server (archivos nuevos). Ambos son additivos (no borran ni modifican
+datos existentes).
+
+**Nota sobre encoding de archivos .sql**: si un `.sql` nuevo tiene texto
+con tildes/ñ en literales de datos (no solo en comentarios), debe
+guardarse con BOM UTF-8 para que SSMS lo abra con la codificación
+correcta — ver Hallazgo #8 en el plan del proyecto para el bug que esto
+evita (mojibake en `cat_plan_cuentas.nombre_cuenta`, ya corregido).
 
 ### Pendiente
 
@@ -243,9 +271,8 @@ Server (archivo nuevo).
   — ver el documento de plan del proyecto para el alcance y los pasos
   propuestos (requiere resolver la trazabilidad Caja↔documento y agregar
   fecha de vencimiento de pago a Compras).
-- Informes Financieros Avanzados — KPIs de Liquidez/Endeudamiento/
-  Rentabilidad, EBITDA y el Estado de Resultados en cascada: pendientes,
-  requieren agregar `clasificacion_corriente` y `subclasificacion_resultado`
-  a `cat_plan_cuentas` (ver plan del proyecto). El formato de presentación
+- Informes Financieros Avanzados — EBITDA y el Estado de Resultados en
+  cascada: pendientes, requieren agregar `subclasificacion_resultado` a
+  `cat_plan_cuentas` (ver plan del proyecto). El formato de presentación
   SII queda pendiente de que el contador de la empresa confirme el
   régimen tributario y los códigos vigentes del Formulario 22.

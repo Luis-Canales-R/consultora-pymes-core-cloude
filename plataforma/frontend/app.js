@@ -590,17 +590,38 @@ function fmtVarCelda(variacion) {
   return `<span class="${clase}">${fmtMoney(variacion.absoluta)} (${fmtPct(variacion.porcentual)})</span>`;
 }
 
+function fmtRatio(n) {
+  return n === null || n === undefined ? "N/D" : n.toFixed(2);
+}
+
+function fmtPctKpi(n) {
+  return n === null || n === undefined ? "N/D" : `${n.toFixed(1)}%`;
+}
+
 async function loadInformes() {
-  const [balance, comparacion] = await Promise.all([
+  const [balance, comparacion, kpis] = await Promise.all([
     apiGet("/informes/balance-8-columnas"),
     apiGet("/informes/comparacion-periodos"),
+    apiGet("/informes/kpis"),
   ]);
 
-  const modoDemo = balance.modo_demo || comparacion.modo_demo;
+  const modoDemo = balance.modo_demo || comparacion.modo_demo || kpis.modo_demo;
   document.getElementById("informes-modo-demo").style.display = modoDemo ? "" : "none";
+  document.getElementById("panel-kpis").style.display = modoDemo ? "none" : "";
   document.getElementById("panel-comparacion-periodos").style.display = modoDemo ? "none" : "";
   document.getElementById("panel-balance-8-columnas").style.display = modoDemo ? "none" : "";
   if (modoDemo) return;
+
+  // --- KPIs ---
+  document.getElementById("kpi-razon-corriente").textContent = fmtRatio(kpis.liquidez.razon_corriente);
+  document.getElementById("kpi-prueba-acida").textContent = fmtRatio(kpis.liquidez.prueba_acida);
+  document.getElementById("kpi-capital-trabajo").textContent = fmtMoney(kpis.liquidez.capital_trabajo);
+  document.getElementById("kpi-endeudamiento").textContent = fmtRatio(kpis.apalancamiento.endeudamiento);
+  document.getElementById("kpi-deuda-patrimonio").textContent = fmtRatio(kpis.apalancamiento.deuda_patrimonio);
+  document.getElementById("kpi-margen-bruto").textContent = fmtPctKpi(kpis.rentabilidad.margen_bruto_pct);
+  document.getElementById("kpi-margen-neto").textContent = fmtPctKpi(kpis.rentabilidad.margen_neto_pct);
+  document.getElementById("kpi-roe").textContent = fmtPctKpi(kpis.rentabilidad.roe_pct);
+  document.getElementById("kpi-roa").textContent = fmtPctKpi(kpis.rentabilidad.roa_pct);
 
   // --- Comparación entre periodos ---
   const tbodyMensual = document.querySelector("#tabla-comparacion-mensual tbody");

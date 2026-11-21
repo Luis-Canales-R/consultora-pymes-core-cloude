@@ -281,6 +281,62 @@
         Corre la plataforma con <code>DB_ENGINE=mssql</code> para verlos.
       </p>
 
+      <div class="panel" id="panel-kpis">
+        <h3>KPIs Estándar (Liquidez, Apalancamiento, Rentabilidad)</h3>
+        <p class="hint">
+          Fórmulas estándar de finanzas corporativas, acumuladas a la fecha (mismo alcance que el Balance General).
+          "N/D" significa que el ratio no está definido (ej. división por Patrimonio = 0).
+        </p>
+
+        <h4>Liquidez</h4>
+        <div class="cards">
+          <div class="card">
+            <span class="card-label">Razón Corriente</span>
+            <span class="card-value" id="kpi-razon-corriente">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Prueba Ácida</span>
+            <span class="card-value" id="kpi-prueba-acida">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Capital de Trabajo</span>
+            <span class="card-value" id="kpi-capital-trabajo">—</span>
+          </div>
+        </div>
+
+        <h4>Apalancamiento</h4>
+        <div class="cards">
+          <div class="card">
+            <span class="card-label">Endeudamiento (Pasivo / Activo)</span>
+            <span class="card-value" id="kpi-endeudamiento">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Deuda / Patrimonio</span>
+            <span class="card-value" id="kpi-deuda-patrimonio">—</span>
+          </div>
+        </div>
+
+        <h4>Rentabilidad</h4>
+        <div class="cards">
+          <div class="card">
+            <span class="card-label">Margen Bruto</span>
+            <span class="card-value" id="kpi-margen-bruto">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Margen Neto</span>
+            <span class="card-value" id="kpi-margen-neto">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">ROE (Rentabilidad del Patrimonio)</span>
+            <span class="card-value" id="kpi-roe">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">ROA (Rentabilidad del Activo)</span>
+            <span class="card-value" id="kpi-roa">—</span>
+          </div>
+        </div>
+      </div>
+
       <div class="panel" id="panel-comparacion-periodos">
         <h3>Comparación entre Periodos</h3>
         <table class="data-table" id="tabla-comparacion-mensual">
