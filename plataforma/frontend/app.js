@@ -198,6 +198,18 @@ async function loadDashboard() {
     document.getElementById("kpi-margen").textContent = fmtMoney(d.margen_bruto);
     document.getElementById("kpi-caja").textContent = fmtMoney(d.saldo_caja);
 
+    const panelBG = document.getElementById("panel-balance-general");
+    const tieneBalanceReal = d.total_activo !== undefined;
+    panelBG.style.display = tieneBalanceReal ? "" : "none";
+    if (tieneBalanceReal) {
+      document.getElementById("kpi-activo").textContent = fmtMoney(d.total_activo);
+      document.getElementById("kpi-pasivo").textContent = fmtMoney(d.total_pasivo);
+      document.getElementById("kpi-patrimonio").textContent = fmtMoney(d.total_patrimonio);
+      document.getElementById("kpi-cuadratura").textContent = fmtMoney(
+        d.total_activo - d.total_pasivo - d.total_patrimonio
+      );
+    }
+
     const meses = new Map();
     d.ventas_por_mes.forEach((r) => meses.set(r.mes, { mes: r.mes, ventas: r.neto, compras: 0 }));
     d.compras_por_mes.forEach((r) => {

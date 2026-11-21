@@ -45,8 +45,34 @@
           <span class="card-value" id="kpi-caja">—</span>
         </div>
       </div>
+      <div class="panel" id="panel-balance-general">
+        <h3>Balance General (real, acumulado a la fecha)</h3>
+        <div class="cards">
+          <div class="card">
+            <span class="card-label">Total Activo</span>
+            <span class="card-value" id="kpi-activo">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Total Pasivo</span>
+            <span class="card-value" id="kpi-pasivo">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Total Patrimonio</span>
+            <span class="card-value" id="kpi-patrimonio">—</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Resultado acumulado (Activo − Pasivo − Patrimonio)</span>
+            <span class="card-value" id="kpi-cuadratura">—</span>
+          </div>
+        </div>
+        <p class="hint">
+          No hay asiento de cierre de ejercicio, así que el Patrimonio todavía no incluye el resultado del
+          periodo: "Resultado acumulado" debería coincidir con el margen bruto. En modo demo (SQLite) este
+          panel no aplica, porque no existe un plan de cuentas real detrás.
+        </p>
+      </div>
       <div class="panel">
-        <h3>Ventas vs. Compras por mes</h3>
+        <h3>Ingresos vs. Costos y Gastos por mes</h3>
         <table class="data-table" id="tabla-meses">
           <thead><tr><th>Mes</th><th>Ventas (neto)</th><th>Compras (neto)</th></tr></thead>
           <tbody></tbody>

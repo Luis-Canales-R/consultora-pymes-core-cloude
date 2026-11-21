@@ -173,8 +173,42 @@ modos, pero el backend SQLite lo ignora a efectos contables.
 `sql/sp_procesar_movimiento_caja_externo.sql` debe desplegarse en SQL
 Server (archivo nuevo).
 
+### Dashboard (conectado a los informes de gestión reales)
+
+En modo SQL Server, `GET /api/dashboard` ya NO suma directo sobre las
+tablas operativas: se calcula a partir de las vistas de
+`sql/crear_vistas_reportes_gestion.sql`, que a su vez agregan
+`tbl_asientos_detalle` (los asientos reales generados por Ventas, Compras
+y Caja).
+
+- `ventas_neto` / `compras_neto` ahora representan Ingresos y
+  (Costos + Gastos) acumulados, tomados de `vw_estado_resultados`
+  (`GROUP BY tipo_cuenta`), no el `monto_neto` crudo de los documentos.
+- `ventas_por_mes` / `compras_por_mes` (gráfico mensual) salen de
+  `vw_estado_resultados` agrupada por `periodo_contable` — mismo formato
+  `'YYYY-MM'` que ya usaba el modo demo, así que el frontend no necesitó
+  cambios para esa parte.
+- `saldo_caja` es la suma de `vw_balance_general.saldo` para las cuentas
+  bajo `cat_plan_cuentas.id_cuenta_padre = 111` (Disponible y Equivalentes
+  de Efectivo) — el saldo contable real de Caja Chica + Banco + Depósitos,
+  no un recálculo manual de los movimientos.
+- Nuevo: `total_activo`, `total_pasivo`, `total_patrimonio`, sumados desde
+  `vw_balance_general` (`GROUP BY tipo_cuenta`) — el Balance General real.
+  El Dashboard muestra estos tres totales en un panel nuevo, más una
+  cuarta tarjeta "Resultado acumulado" (`Activo − Pasivo − Patrimonio`):
+  como todavía no existe un asiento de cierre de ejercicio, ese valor no
+  es una descuadratura — es el resultado del periodo, y debería coincidir
+  con `margen_bruto`. El panel se oculta automáticamente en modo demo
+  SQLite (no hay plan de cuentas real detrás).
+
+El contrato JSON del endpoint se mantuvo retrocompatible (mismas claves
+que ya consumía `app.js`), agregando solo las tres claves nuevas del
+Balance General; el modo SQLite sigue calculando como antes, sin tocar
+ese código.
+
 ### Pendiente
 
-- El Dashboard sigue calculando sus totales directo sobre las tablas
-  operativas; falta conectarlo a `vw_balance_general` / `vw_estado_resultados`
-  para mostrar el Balance General y Estado de Resultados reales.
+- Flujo de Caja Proyectado (control de liquidez): no implementado todavía
+  — ver el documento de plan del proyecto para el alcance y los pasos
+  propuestos (requiere resolver la trazabilidad Caja↔documento y agregar
+  fecha de vencimiento de pago a Compras).

@@ -772,6 +772,93 @@ def crear_movimiento_caja():
 def dashboard():
     conn = db.get_conn()
 
+    if db.DB_ENGINE == "mssql":
+        # Estado de Resultados real (acumulado, todos los periodos), calculado
+        # por el motor contable a partir de los asientos (vw_estado_resultados).
+        er_rows = db.fetch_dicts(
+            conn,
+            """SELECT tipo_cuenta, COALESCE(SUM(monto_periodo), 0) AS total
+               FROM vw_estado_resultados
+               GROUP BY tipo_cuenta""",
+        )
+        er_por_tipo = {r["tipo_cuenta"]: r["total"] for r in er_rows}
+        ingresos_total = float(er_por_tipo.get("INGRESO", 0) or 0)
+        costos_gastos_total = float(er_por_tipo.get("COSTO", 0) or 0) + float(er_por_tipo.get("GASTO", 0) or 0)
+
+        # Balance General real (saldo acumulado a la fecha, vw_balance_general).
+        bg_rows = db.fetch_dicts(
+            conn,
+            """SELECT tipo_cuenta, COALESCE(SUM(saldo), 0) AS total
+               FROM vw_balance_general
+               GROUP BY tipo_cuenta""",
+        )
+        bg_por_tipo = {r["tipo_cuenta"]: r["total"] for r in bg_rows}
+        total_activo = float(bg_por_tipo.get("ACTIVO", 0) or 0)
+        total_pasivo = float(bg_por_tipo.get("PASIVO", 0) or 0)
+        total_patrimonio = float(bg_por_tipo.get("PATRIMONIO", 0) or 0)
+
+        # Saldo de caja real: suma de las cuentas imputables bajo "Disponible y
+        # Equivalentes de Efectivo" (mismo filtro que /catalogos/cuentas-tesoreria).
+        saldo_caja_row = db.fetch_one_dict(
+            conn,
+            """SELECT COALESCE(SUM(vbg.saldo), 0) AS saldo
+               FROM vw_balance_general vbg
+               JOIN cat_plan_cuentas cp ON cp.id_cuenta = vbg.id_cuenta
+               WHERE cp.id_cuenta_padre = 111""",
+        )
+        saldo_caja = float(saldo_caja_row["saldo"]) if saldo_caja_row and saldo_caja_row["saldo"] is not None else 0.0
+
+        ventas_count_row = db.fetch_one_dict(
+            conn,
+            "SELECT COUNT(*) AS n FROM tbl_ventas_devengadas WHERE estado_venta != 'ANULADO'",
+        )
+        compras_count_row = db.fetch_one_dict(
+            conn,
+            "SELECT COUNT(*) AS n FROM tbl_ordenes_compra WHERE estado_oc != 'ANULADA'",
+        )
+
+        # Ingresos vs. Costos+Gastos por periodo contable, para el gráfico
+        # mensual (mismo formato 'YYYY-MM' que usa el modo demo sqlite).
+        ingresos_por_mes = db.fetch_dicts(
+            conn,
+            """SELECT periodo_contable AS mes, COALESCE(SUM(monto_periodo), 0) AS neto
+               FROM vw_estado_resultados
+               WHERE tipo_cuenta = 'INGRESO'
+               GROUP BY periodo_contable
+               ORDER BY periodo_contable""",
+        )
+        costos_gastos_por_mes = db.fetch_dicts(
+            conn,
+            """SELECT periodo_contable AS mes, COALESCE(SUM(monto_periodo), 0) AS neto
+               FROM vw_estado_resultados
+               WHERE tipo_cuenta IN ('COSTO', 'GASTO')
+               GROUP BY periodo_contable
+               ORDER BY periodo_contable""",
+        )
+
+        conn.close()
+
+        return jsonify(
+            {
+                "ventas_neto": ingresos_total,
+                "ventas_count": ventas_count_row["n"] if ventas_count_row else 0,
+                "compras_neto": costos_gastos_total,
+                "compras_count": compras_count_row["n"] if compras_count_row else 0,
+                "margen_bruto": ingresos_total - costos_gastos_total,
+                "saldo_caja": saldo_caja,
+                "ventas_por_mes": ingresos_por_mes,
+                "compras_por_mes": costos_gastos_por_mes,
+                # Balance General real: no consumido todavía por el frontend
+                # actual (solo tiene tarjetas de ventas/compras/margen/caja),
+                # se expone ya en la API para la próxima iteración del Dashboard.
+                "total_activo": total_activo,
+                "total_pasivo": total_pasivo,
+                "total_patrimonio": total_patrimonio,
+            }
+        )
+
+    # ---- Modo demo (sqlite): sin motor contable real, se aproxima el
+    # Dashboard sumando directo sobre las tablas operativas. ----
     ventas = conn.execute(
         "SELECT COALESCE(SUM(monto_neto),0) AS neto, COUNT(*) AS n "
         "FROM tbl_ventas_devengadas WHERE estado_venta != 'ANULADO'"
