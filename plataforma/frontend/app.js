@@ -89,12 +89,14 @@ function initNav() {
 let CACHE_TERCEROS = [];
 let CACHE_CENTROS = [];
 let CACHE_PRODUCTOS = [];
+let CACHE_CUENTAS_TESORERIA = [];
 
 async function refreshCatalogCaches() {
-  [CACHE_TERCEROS, CACHE_CENTROS, CACHE_PRODUCTOS] = await Promise.all([
+  [CACHE_TERCEROS, CACHE_CENTROS, CACHE_PRODUCTOS, CACHE_CUENTAS_TESORERIA] = await Promise.all([
     apiGet("/terceros"),
     apiGet("/centros_costo"),
     apiGet("/productos"),
+    apiGet("/catalogos/cuentas-tesoreria"),
   ]);
 }
 
@@ -159,12 +161,27 @@ function fillProductoSelects() {
   });
 }
 
+function fillCuentaTesoreriaSelects() {
+  document.querySelectorAll("select.cuenta-tesoreria-select").forEach((sel) => {
+    const current = sel.value;
+    sel.innerHTML = "";
+    CACHE_CUENTAS_TESORERIA.forEach((c) => {
+      const o = document.createElement("option");
+      o.value = c.codigo_cuenta;
+      o.textContent = c.nombre_cuenta;
+      sel.appendChild(o);
+    });
+    if (current) sel.value = current;
+  });
+}
+
 async function refreshAllSelects() {
   await refreshCatalogCaches();
   fillTerceroSelects("cliente");
   fillTerceroSelects("proveedor");
   fillCentroSelects();
   fillProductoSelects();
+  fillCuentaTesoreriaSelects();
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +412,7 @@ function initFormCompra() {
 const TIPO_FLUJO_LABEL = {
   INGRESO: "Ingreso",
   EGRESO: "Egreso",
+  TRASPASO: "Traspaso",
   TRASPASO_HASTA: "Traspaso (hacia)",
   TRASPASO_DESDE: "Traspaso (desde)",
 };
@@ -409,6 +427,7 @@ async function loadCaja() {
     tr.innerHTML = `
       <td>${fmtFecha(m.fecha_movimiento)}</td>
       <td>${TIPO_FLUJO_LABEL[m.tipo_flujo] || m.tipo_flujo}</td>
+      <td>${m.cuenta_tesoreria || "—"}</td>
       <td>${fmtMoney(m.monto_absoluto)}</td>
       <td>${m.glosa_movimiento}</td>
       <td>${m.tercero || "—"}</td>
@@ -419,12 +438,27 @@ async function loadCaja() {
 
 function initFormCaja() {
   const form = document.getElementById("form-caja");
+  const selTipo = document.getElementById("caja-tipo-flujo");
+  const campoDestino = document.getElementById("caja-campo-destino");
+  const selDestino = document.getElementById("caja-cuenta-destino");
+  const labelOrigen = document.getElementById("caja-label-origen");
+
+  function actualizarVisibilidadDestino() {
+    const esTraspaso = selTipo.value === "TRASPASO";
+    campoDestino.style.display = esTraspaso ? "" : "none";
+    selDestino.required = esTraspaso;
+    labelOrigen.firstChild.textContent = esTraspaso ? "Cuenta origen (traspaso) " : "Cuenta de tesorería ";
+  }
+  selTipo.addEventListener("change", actualizarVisibilidadDestino);
+  actualizarVisibilidadDestino();
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
       await apiPost("/caja", formToPayload(form));
       showMsg("msg-caja", "Movimiento registrado.");
       form.reset();
+      actualizarVisibilidadDestino();
       loadCaja();
       loadDashboard();
     } catch (err) {

@@ -41,10 +41,8 @@ campos requeridos y manejo de errores (duplicados, campos faltantes).
 
 ## Modo producción (SQL Server real)
 
-**Catálogos (Terceros, Productos, Centros de costo), Ventas y Compras y
-Gastos ya están adaptados al esquema real.** Falta Caja (sigue apuntando al
-esquema simplificado, además de un bug de sintaxis SQLite/`LIMIT`) —
-próximo paso.
+**Catálogos (Terceros, Productos, Centros de costo), Ventas, Compras y
+Gastos, y Caja ya están adaptados al esquema real.**
 
 ### Requisitos antes de usarlo
 
@@ -143,13 +141,40 @@ JOIN rel_terceros_roles r ON r.id_tercero = t.id_tercero AND r.id_rol = 2 -- pro
 WHERE NOT EXISTS (SELECT 1 FROM map_clientes m WHERE m.nombre_informal_excel = t.razon_social);
 ```
 
+**Caja (Movimientos de Caja)** usa el nuevo stored procedure
+`sql/sp_procesar_movimiento_caja_externo.sql` (análogo a Ventas/Compras,
+no existía antes): recibe un movimiento puntual (Ingreso, Egreso o
+Traspaso entre cuentas) y genera su asiento automáticamente, replicando la
+lógica ya probada en `sp_procesar_etl_fase3` (sección 4.3/4.3b/4.3c) para
+el flujo de importación por Excel, pero resuelta en una sola llamada:
+
+- **Ingreso**: Debe la cuenta de tesorería elegida; Haber Clientes (1121,
+  si el movimiento tiene un tercero asociado) o Ingreso (4113, si no).
+- **Egreso**: Debe Proveedores (2111, si hay tercero) o Gasto (6215, si
+  no); Haber la cuenta de tesorería.
+- **Traspaso entre cuentas**: a diferencia del Excel (que arma el traspaso
+  emparejando dos filas por fecha/monto/glosa idénticos, cargadas por
+  separado), acá se registra en **una sola operación**: se elige la cuenta
+  de origen y la cuenta de destino en el mismo formulario, y el SP inserta
+  las dos filas (`TRASPASO_DESDE` / `TRASPASO_HASTA`) y arma un único
+  asiento de 2 líneas (Debe cuenta destino; Haber cuenta origen) — sin
+  ambigüedad de emparejamiento posible.
+
+La cuenta de tesorería (Caja Chica, Banco Principal, Depósitos a Plazo) se
+identifica por su código en el plan de cuentas, listado por el nuevo
+endpoint `GET /api/catalogos/cuentas-tesoreria`
+(`cat_plan_cuentas WHERE id_cuenta_padre = 111`, el nodo "Disponible y
+Equivalentes de Efectivo"). En modo demo SQLite ese endpoint devuelve una
+única cuenta genérica, ya que el prototipo no tiene un plan de cuentas
+real — el campo existe igual para que el formulario sea idéntico en ambos
+modos, pero el backend SQLite lo ignora a efectos contables.
+
+**IMPORTANTE — ejecutar antes de usar Caja:**
+`sql/sp_procesar_movimiento_caja_externo.sql` debe desplegarse en SQL
+Server (archivo nuevo).
+
 ### Pendiente
 
-- Caja: aún no adaptada (sigue con el esquema simplificado, con un bug de
-  sintaxis SQLite/`LIMIT` que no es válida en SQL Server).
 - El Dashboard sigue calculando sus totales directo sobre las tablas
   operativas; falta conectarlo a `vw_balance_general` / `vw_estado_resultados`
   para mostrar el Balance General y Estado de Resultados reales.
-- No se pudo probar `DB_ENGINE=mssql` end-to-end en el entorno de
-  desarrollo (sin pyodbc ni acceso al SQL Server del usuario) — probar en
-  la máquina real y reportar cualquier error para corregirlo.

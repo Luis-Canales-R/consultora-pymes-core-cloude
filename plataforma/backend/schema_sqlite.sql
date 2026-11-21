@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS tbl_movimientos_caja (
     id_movimiento       INTEGER PRIMARY KEY AUTOINCREMENT,
     fecha_movimiento    TEXT NOT NULL,
     tipo_flujo          TEXT NOT NULL
-                         CHECK (tipo_flujo IN ('INGRESO','EGRESO','TRASPASO_HASTA','TRASPASO_DESDE')),
+                         CHECK (tipo_flujo IN ('INGRESO','EGRESO','TRASPASO')),
     monto_absoluto      REAL NOT NULL CHECK (monto_absoluto > 0),
     glosa_movimiento    TEXT NOT NULL,
     id_tercero          INTEGER REFERENCES tbl_terceros(id_tercero),

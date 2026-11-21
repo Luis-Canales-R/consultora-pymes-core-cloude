@@ -633,9 +633,49 @@ def crear_compra():
 # Movimientos de Caja (pestaña Excel "Movimientos_Caja")
 # ---------------------------------------------------------------------------
 
+@app.route("/api/catalogos/cuentas-tesoreria", methods=["GET"])
+def listar_cuentas_tesoreria():
+    """Cuentas de Caja/Banco disponibles para registrar un movimiento.
+
+    En modo real (mssql) son las cuentas imputables bajo "Disponible y
+    Equivalentes de Efectivo" (Caja Chica, Banco Principal, Depósitos a
+    Plazo) del plan de cuentas. En modo demo (sqlite, que no tiene plan de
+    cuentas real) se devuelve una única cuenta genérica -- el campo existe
+    igual para que el formulario sea consistente entre ambos modos, pero
+    el backend sqlite no la usa para nada contable (ver crear_movimiento_caja).
+    """
+    if db.DB_ENGINE == "mssql":
+        conn = db.get_conn()
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT codigo_cuenta, nombre_cuenta
+               FROM cat_plan_cuentas
+               WHERE id_cuenta_padre = 111 AND es_imputable = 1
+               ORDER BY codigo_cuenta""",
+        )
+        conn.close()
+        return jsonify(rows)
+    return jsonify([{"codigo_cuenta": "CAJA-DEMO", "nombre_cuenta": "Caja / Banco (modo demo SQLite)"}])
+
+
 @app.route("/api/caja", methods=["GET"])
 def listar_caja():
     conn = db.get_conn()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT m.id_movimiento, m.fecha_movimiento, m.tipo_flujo, m.monto_absoluto, m.glosa_movimiento,
+                      cp.nombre_cuenta AS cuenta_tesoreria, t.razon_social AS tercero, c.nombre_cc AS centro_costo
+               FROM tbl_movimientos_caja m
+               LEFT JOIN cat_plan_cuentas cp ON cp.id_cuenta = m.id_cuenta_bancaria
+               LEFT JOIN tbl_terceros t ON t.id_tercero = m.id_tercero
+               LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = m.id_centro_costo
+               ORDER BY m.fecha_movimiento DESC, m.id_movimiento DESC
+               OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY""",
+        )
+        conn.close()
+        return jsonify(rows)
+
     rows = conn.execute(
         """SELECT m.*, t.razon_social AS tercero, c.nombre AS centro_costo
            FROM tbl_movimientos_caja m
@@ -654,8 +694,50 @@ def crear_movimiento_caja():
     missing = require_fields(payload, ["fecha_movimiento", "tipo_flujo", "monto_absoluto", "glosa_movimiento"])
     if missing:
         return error(missing)
-    if payload["tipo_flujo"] not in ("INGRESO", "EGRESO", "TRASPASO_HASTA", "TRASPASO_DESDE"):
+    if payload["tipo_flujo"] not in ("INGRESO", "EGRESO", "TRASPASO"):
         return error("tipo_flujo inválido")
+
+    if db.DB_ENGINE == "mssql":
+        missing_mssql = require_fields(payload, ["codigo_cuenta_origen"])
+        if missing_mssql:
+            return error(missing_mssql)
+        if payload["tipo_flujo"] == "TRASPASO" and not payload.get("codigo_cuenta_destino"):
+            return error("Un traspaso requiere indicar la cuenta de destino.")
+
+        conn = db.get_conn()
+        try:
+            nombre_tercero = None
+            if payload.get("id_tercero"):
+                tercero = db.fetch_one_dict(
+                    conn, "SELECT razon_social FROM tbl_terceros WHERE id_tercero = ?", (payload["id_tercero"],)
+                )
+                if not tercero:
+                    raise ValueError("Tercero no encontrado.")
+                nombre_tercero = tercero["razon_social"]
+
+            cur = conn.execute(
+                """EXEC dbo.sp_procesar_movimiento_caja_externo
+                       @fecha_movimiento = ?, @tipo_flujo = ?, @monto_absoluto = ?,
+                       @glosa_movimiento = ?, @codigo_cuenta_origen = ?, @codigo_cuenta_destino = ?,
+                       @nombre_informal_tercero = ?, @id_centro_costo = ?""",
+                (
+                    payload["fecha_movimiento"], payload["tipo_flujo"], float(payload["monto_absoluto"]),
+                    payload["glosa_movimiento"], payload["codigo_cuenta_origen"],
+                    payload.get("codigo_cuenta_destino"), nombre_tercero, payload.get("id_centro_costo"),
+                ),
+            )
+            fila = cur.fetchone()
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            conn.close()
+            return error(f"No se pudo registrar el movimiento: {exc}")
+        conn.close()
+        return jsonify({"id_movimiento": fila[0] if fila else None}), 201
+
     conn = db.get_conn()
     try:
         cur = conn.execute(

@@ -154,12 +154,17 @@
       <form id="form-caja" class="form-grid">
         <label>Fecha <input type="date" name="fecha_movimiento" required></label>
         <label>Tipo
-          <select name="tipo_flujo" required>
+          <select name="tipo_flujo" id="caja-tipo-flujo" required>
             <option value="INGRESO">Ingreso</option>
             <option value="EGRESO">Egreso</option>
-            <option value="TRASPASO_HASTA">Traspaso (hacia esta cuenta)</option>
-            <option value="TRASPASO_DESDE">Traspaso (desde esta cuenta)</option>
+            <option value="TRASPASO">Traspaso entre cuentas</option>
           </select>
+        </label>
+        <label id="caja-label-origen">Cuenta de tesorería
+          <select name="codigo_cuenta_origen" id="caja-cuenta-origen" class="cuenta-tesoreria-select" required></select>
+        </label>
+        <label id="caja-campo-destino" style="display:none">Cuenta destino (traspaso)
+          <select name="codigo_cuenta_destino" id="caja-cuenta-destino" class="cuenta-tesoreria-select"></select>
         </label>
         <label>Monto <input type="number" step="0.01" name="monto_absoluto" required></label>
         <label>Glosa <input name="glosa_movimiento" required></label>
@@ -173,7 +178,7 @@
         <span class="form-msg" id="msg-caja"></span>
       </form>
       <table class="data-table" id="tabla-caja">
-        <thead><tr><th>Fecha</th><th>Tipo</th><th>Monto</th><th>Glosa</th><th>Tercero</th><th>Centro costo</th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Cuenta</th><th>Monto</th><th>Glosa</th><th>Tercero</th><th>Centro costo</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
