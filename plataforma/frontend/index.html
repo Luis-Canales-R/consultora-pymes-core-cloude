@@ -215,7 +215,10 @@
       <h2>Catálogos</h2>
 
       <div class="panel">
-        <h3>Terceros (clientes / proveedores)</h3>
+        <div class="panel-header">
+          <h3>Terceros (clientes / proveedores)</h3>
+          <a class="btn-export" href="/api/terceros/export" download>⬇ Descargar Excel</a>
+        </div>
         <form id="form-tercero" class="form-grid">
           <label>Código <input name="codigo_tercero" placeholder="(se genera automático)"></label>
           <label>Razón social <input name="razon_social" required></label>
@@ -233,7 +236,10 @@
       </div>
 
       <div class="panel">
-        <h3>Productos / Servicios</h3>
+        <div class="panel-header">
+          <h3>Productos / Servicios</h3>
+          <a class="btn-export" href="/api/productos/export" download>⬇ Descargar Excel</a>
+        </div>
         <form id="form-producto" class="form-grid">
           <label>SKU <input name="sku_codigo" placeholder="(se genera automático)"></label>
           <label>Nombre <input name="nombre" required></label>
@@ -260,7 +266,10 @@
       </div>
 
       <div class="panel">
-        <h3>Centros de costo</h3>
+        <div class="panel-header">
+          <h3>Centros de costo</h3>
+          <a class="btn-export" href="/api/centros_costo/export" download>⬇ Descargar Excel</a>
+        </div>
         <form id="form-centro" class="form-grid">
           <label>Nombre <input name="nombre" required></label>
           <button type="submit">Agregar centro de costo</button>

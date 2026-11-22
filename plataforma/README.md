@@ -305,13 +305,41 @@ Exportación Masiva" (ver plan del proyecto): exportación masiva de
 catálogos, exportación masiva de módulos transaccionales, carga masiva
 de catálogos y carga masiva de transaccionales siguen, en ese orden.
 
+**IMPORTANTE**: requiere `openpyxl` (`pip install openpyxl`) en la
+máquina donde corre la plataforma — ver "Requisitos antes de usarlo" más
+arriba.
+
+### Exportación a Excel (Fase 2: catálogos)
+
+Terceros, Productos/Servicios y Centros de Costo tienen el mismo botón
+"⬇ Descargar Excel" en la pestaña Catálogos:
+
+- `GET /api/terceros/export`
+- `GET /api/productos/export`
+- `GET /api/centros_costo/export`
+
+A diferencia de los Informes (Fase 1), estos **sí funcionan también en
+modo SQLite** (demo): los tres catálogos son listas directas de tabla,
+sin depender de un plan de cuentas real, así que no hay razón para
+bloquear la exportación en ese modo. El contenido se adapta al motor:
+en `mssql`, Productos incluye Tipo/Categoría/Unidad de Medida (joins que
+no existen en el esquema simplificado de SQLite) y Centros de Costo
+incluye su código (`codigo_cc`, que tampoco existe en SQLite). Cada
+endpoint de exportación reutiliza la misma consulta que ya usa su
+endpoint JSON (`_obtener_terceros`/`_obtener_productos`/
+`_obtener_centros_costo`, factorizadas para esto), probado end-to-end
+contra el propio SQLite de demo (crear un registro por API y confirmar
+que aparece en el Excel descargado) y, por separado, con datos
+sintéticos que imitan las columnas reales de `mssql` (incluyendo los
+joins de Productos) vía el test client de Flask — no validado todavía
+por el usuario contra su SQL Server real.
+
 ### Pendiente
 
-- Exportación masiva de catálogos (Terceros, Productos/Servicios,
-  Centros de Costo) y de módulos transaccionales (Ventas, Compras,
-  Caja), y carga masiva de todos los módulos (plantilla descargable,
-  validación fila por fila, reporte de errores) — ver el documento de
-  plan del proyecto para el orden de fases y los riesgos de cada una.
+- Exportación masiva de módulos transaccionales (Ventas, Compras, Caja),
+  y carga masiva de todos los módulos (plantilla descargable, validación
+  fila por fila, reporte de errores) — ver el documento de plan del
+  proyecto para el orden de fases y los riesgos de cada una.
 - Flujo de Caja Proyectado (control de liquidez): no implementado todavía
   — ver el documento de plan del proyecto para el alcance y los pasos
   propuestos (requiere resolver la trazabilidad Caja↔documento y agregar

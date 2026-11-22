@@ -69,8 +69,9 @@ ROL_CLIENTE = 1
 ROL_PROVEEDOR = 2
 
 
-@app.route("/api/terceros", methods=["GET"])
-def listar_terceros():
+def _obtener_terceros():
+    """Factorizado para que lo use tanto el endpoint JSON (listar_terceros)
+    como el de exportación a Excel, sin duplicar la consulta."""
     conn = db.get_conn()
     if db.DB_ENGINE == "mssql":
         rows = db.fetch_dicts(
@@ -93,7 +94,39 @@ def listar_terceros():
             "SELECT * FROM tbl_terceros WHERE estado_activo = 1 ORDER BY razon_social"
         ).fetchall())
     conn.close()
-    return jsonify(rows)
+    return rows
+
+
+@app.route("/api/terceros", methods=["GET"])
+def listar_terceros():
+    return jsonify(_obtener_terceros())
+
+
+@app.route("/api/terceros/export", methods=["GET"])
+def exportar_terceros():
+    filas = []
+    for r in _obtener_terceros():
+        fila = dict(r)
+        fila["es_cliente"] = "Sí" if fila.get("es_cliente") else "No"
+        fila["es_proveedor"] = "Sí" if fila.get("es_proveedor") else "No"
+        filas.append(fila)
+
+    columnas = [
+        ("Código", "codigo_tercero", None),
+        ("Razón Social", "razon_social", None),
+        ("RUT/DNI", "rut_dni", None),
+        ("Email", "contacto_email", None),
+        ("Cliente", "es_cliente", None),
+        ("Proveedor", "es_proveedor", None),
+    ]
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_tabla(wb, "Terceros", columnas, filas)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("terceros"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/api/terceros", methods=["POST"])
@@ -174,8 +207,9 @@ def crear_tercero():
     return jsonify({"id_tercero": new_id}), 201
 
 
-@app.route("/api/productos", methods=["GET"])
-def listar_productos():
+def _obtener_productos():
+    """Factorizado para que lo use tanto el endpoint JSON (listar_productos)
+    como el de exportación a Excel, sin duplicar la consulta."""
     conn = db.get_conn()
     if db.DB_ENGINE == "mssql":
         rows = db.fetch_dicts(
@@ -195,7 +229,38 @@ def listar_productos():
             "SELECT * FROM tbl_productos_servicios WHERE estado_activo = 1 ORDER BY nombre"
         ).fetchall())
     conn.close()
-    return jsonify(rows)
+    return rows
+
+
+@app.route("/api/productos", methods=["GET"])
+def listar_productos():
+    return jsonify(_obtener_productos())
+
+
+@app.route("/api/productos/export", methods=["GET"])
+def exportar_productos():
+    filas = []
+    for r in _obtener_productos():
+        fila = dict(r)
+        fila["aplica_iva"] = "Afecto" if fila.get("aplica_iva") else "Exento"
+        filas.append(fila)
+
+    columnas = [("SKU", "sku_codigo", None), ("Nombre", "nombre", None)]
+    if db.DB_ENGINE == "mssql":
+        columnas += [("Tipo", "tipo_item", None), ("Categoría", "categoria", None), ("Unidad de Medida", "unidad_medida", None)]
+    columnas += [
+        ("Precio Venta Base", "precio_venta_base", excel_export.FORMATO_MONEDA),
+        ("IVA", "aplica_iva", None),
+        ("Modo Obtención", "modo_obtencion", None),
+    ]
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_tabla(wb, "Productos", columnas, filas)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("productos"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/api/productos", methods=["POST"])
@@ -264,8 +329,9 @@ def crear_producto():
     return jsonify({"id_item": new_id}), 201
 
 
-@app.route("/api/centros_costo", methods=["GET"])
-def listar_centros_costo():
+def _obtener_centros_costo():
+    """Factorizado para que lo use tanto el endpoint JSON (listar_centros_costo)
+    como el de exportación a Excel, sin duplicar la consulta."""
     conn = db.get_conn()
     if db.DB_ENGINE == "mssql":
         rows = db.fetch_dicts(
@@ -276,7 +342,30 @@ def listar_centros_costo():
     else:
         rows = rows_to_dicts(conn.execute("SELECT * FROM tbl_centros_costo ORDER BY nombre").fetchall())
     conn.close()
-    return jsonify(rows)
+    return rows
+
+
+@app.route("/api/centros_costo", methods=["GET"])
+def listar_centros_costo():
+    return jsonify(_obtener_centros_costo())
+
+
+@app.route("/api/centros_costo/export", methods=["GET"])
+def exportar_centros_costo():
+    filas = _obtener_centros_costo()
+    columnas = []
+    if db.DB_ENGINE == "mssql":
+        columnas.append(("Código", "codigo_cc", None))
+    columnas.append(("Nombre", "nombre", None))
+
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_tabla(wb, "Centros de Costo", columnas, filas)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("centros_costo"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/api/centros_costo", methods=["POST"])
