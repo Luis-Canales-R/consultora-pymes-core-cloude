@@ -435,6 +435,82 @@ def listar_ventas():
     return jsonify(rows)
 
 
+def _obtener_ventas_export():
+    """Datos para la exportación de Ventas a Excel. A diferencia de
+    listar_ventas (que sirve la tabla de la UI, a nivel de encabezado),
+    esto exporta a nivel de ÍTEM/línea en mssql (una fila por línea del
+    documento, folio repetido) -- el mismo nivel de detalle que va a pedir
+    la futura plantilla de carga masiva (Fase 5), por la simetría export/
+    import que se definió en el plan del proyecto. En SQLite (demo) no
+    existe tabla de detalle (esquema simplificado del MVP, ver schema_
+    sqlite.sql), así que ahí se exporta a nivel de encabezado."""
+    conn = db.get_conn()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT v.folio_factura, v.fecha_emision, v.fecha_vencimiento,
+                      t.razon_social AS cliente, c.nombre_cc AS centro_costo,
+                      v.estado_venta, p.sku_codigo, p.nombre AS producto,
+                      d.cantidad, d.precio_unitario, d.porcentaje_descuento, d.subtotal_neto,
+                      v.monto_neto, v.monto_iva, v.monto_total
+               FROM tbl_ventas_devengadas v
+               JOIN tbl_terceros t ON t.id_tercero = v.id_tercero
+               LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = v.id_centro_costo
+               JOIN tbl_ventas_detalle d ON d.id_venta_devengada = v.id_venta_devengada
+               JOIN tbl_productos_servicios p ON p.id_item = d.id_item
+               ORDER BY v.fecha_emision DESC, v.id_venta_devengada DESC, d.id_venta_detalle""",
+        )
+        detalle = True
+    else:
+        rows = rows_to_dicts(conn.execute(
+            """SELECT v.folio_factura, v.fecha_emision,
+                      t.razon_social AS cliente, c.nombre AS centro_costo,
+                      v.estado_venta, v.monto_neto, v.monto_iva, v.monto_total
+               FROM tbl_ventas_devengadas v
+               JOIN tbl_terceros t ON t.id_tercero = v.id_tercero
+               LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = v.id_centro_costo
+               ORDER BY v.fecha_emision DESC, v.id_venta_devengada DESC"""
+        ).fetchall())
+        detalle = False
+    conn.close()
+    return rows, detalle
+
+
+@app.route("/api/ventas/export", methods=["GET"])
+def exportar_ventas():
+    filas, detalle = _obtener_ventas_export()
+    columnas = [
+        ("Folio", "folio_factura", None),
+        ("Fecha Emisión", "fecha_emision", None),
+        ("Fecha Vencimiento", "fecha_vencimiento", None),
+        ("Cliente", "cliente", None),
+        ("Centro de Costo", "centro_costo", None),
+        ("Estado", "estado_venta", None),
+    ]
+    if detalle:
+        columnas += [
+            ("SKU", "sku_codigo", None),
+            ("Producto/Servicio", "producto", None),
+            ("Cantidad", "cantidad", "#,##0.0000"),
+            ("Precio Unitario", "precio_unitario", excel_export.FORMATO_MONEDA),
+            ("% Descuento", "porcentaje_descuento", "0.00"),
+            ("Subtotal Neto", "subtotal_neto", excel_export.FORMATO_MONEDA),
+        ]
+    columnas += [
+        ("Monto Neto (Documento)", "monto_neto", excel_export.FORMATO_MONEDA),
+        ("Monto IVA (Documento)", "monto_iva", excel_export.FORMATO_MONEDA),
+        ("Monto Total (Documento)", "monto_total", excel_export.FORMATO_MONEDA),
+    ]
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_tabla(wb, "Ventas", columnas, filas)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("ventas"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 def _validar_lineas(payload):
     """Valida el arreglo 'lineas' (documento multi-ítem). Devuelve un
     mensaje de error (str) o None si está bien formado."""
@@ -597,6 +673,82 @@ def listar_compras():
     return jsonify(rows_to_dicts(rows))
 
 
+def _obtener_compras_export():
+    """Análogo a _obtener_ventas_export: nivel de ítem/línea en mssql
+    (tbl_compras_detalle), nivel de encabezado en SQLite (demo, sin tabla
+    de detalle). Solo cubre compras de ítems del catálogo de Productos/
+    Servicios (id_item) -- compras de insumos/materia prima (id_insumo)
+    quedan fuera, igual que en el formulario web (ver Backlog Tarea #48)."""
+    conn = db.get_conn()
+    if db.DB_ENGINE == "mssql":
+        rows = db.fetch_dicts(
+            conn,
+            """SELECT oc.folio_oc, oc.fecha_emision, oc.fecha_entrega_esperada,
+                      t.razon_social AS proveedor, cc.nombre_cc AS centro_costo,
+                      oc.estado_oc, p.sku_codigo, p.nombre AS producto,
+                      cd.cantidad, cd.precio_unitario, cd.porcentaje_descuento, cd.subtotal_neto,
+                      oc.monto_neto, oc.monto_iva, oc.monto_total
+               FROM tbl_ordenes_compra oc
+               JOIN tbl_terceros t ON t.id_tercero = oc.id_tercero
+               LEFT JOIN tbl_centros_costo cc ON cc.id_centro_costo = oc.id_centro_costo
+               JOIN tbl_compras_detalle cd ON cd.id_orden_compra = oc.id_orden_compra
+               LEFT JOIN tbl_productos_servicios p ON p.id_item = cd.id_item
+               ORDER BY oc.fecha_emision DESC, oc.id_orden_compra DESC, cd.id_compra_detalle""",
+        )
+        detalle = True
+    else:
+        rows = rows_to_dicts(conn.execute(
+            """SELECT c.folio_documento AS folio_compra, c.fecha_emision, c.descripcion,
+                      t.razon_social AS proveedor, cc.nombre AS centro_costo,
+                      c.estado_compra, c.monto_neto, c.monto_iva, c.monto_total
+               FROM tbl_compras_gastos c
+               JOIN tbl_terceros t ON t.id_tercero = c.id_tercero
+               LEFT JOIN tbl_centros_costo cc ON cc.id_centro_costo = c.id_centro_costo
+               ORDER BY c.fecha_emision DESC, c.id_compra DESC"""
+        ).fetchall())
+        detalle = False
+    conn.close()
+    return rows, detalle
+
+
+@app.route("/api/compras/export", methods=["GET"])
+def exportar_compras():
+    filas, detalle = _obtener_compras_export()
+    columnas = [("Folio", "folio_oc" if detalle else "folio_compra", None)]
+    columnas.append(("Fecha Emisión", "fecha_emision", None))
+    if detalle:
+        columnas.append(("Fecha Entrega Esperada", "fecha_entrega_esperada", None))
+    columnas += [
+        ("Proveedor", "proveedor", None),
+        ("Centro de Costo", "centro_costo", None),
+        ("Estado", "estado_oc" if detalle else "estado_compra", None),
+    ]
+    if detalle:
+        columnas += [
+            ("SKU", "sku_codigo", None),
+            ("Producto/Servicio", "producto", None),
+            ("Cantidad", "cantidad", "#,##0.0000"),
+            ("Precio Unitario", "precio_unitario", excel_export.FORMATO_MONEDA),
+            ("% Descuento", "porcentaje_descuento", "0.00"),
+            ("Subtotal Neto", "subtotal_neto", excel_export.FORMATO_MONEDA),
+        ]
+    else:
+        columnas.append(("Descripción", "descripcion", None))
+    columnas += [
+        ("Monto Neto (Documento)", "monto_neto", excel_export.FORMATO_MONEDA),
+        ("Monto IVA (Documento)", "monto_iva", excel_export.FORMATO_MONEDA),
+        ("Monto Total (Documento)", "monto_total", excel_export.FORMATO_MONEDA),
+    ]
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_tabla(wb, "Compras", columnas, filas)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("compras"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @app.route("/api/compras", methods=["POST"])
 def crear_compra():
     payload = request.get_json(force=True)
@@ -748,34 +900,63 @@ def listar_cuentas_tesoreria():
     return jsonify([{"codigo_cuenta": "CAJA-DEMO", "nombre_cuenta": "Caja / Banco (modo demo SQLite)"}])
 
 
-@app.route("/api/caja", methods=["GET"])
-def listar_caja():
+def _obtener_caja(limite=None):
+    """Factorizado para que lo use tanto el endpoint JSON (listar_caja,
+    con el límite de 200 que ya tenía la UI) como el de exportación (sin
+    límite, para que el Excel traiga todos los movimientos)."""
     conn = db.get_conn()
     if db.DB_ENGINE == "mssql":
-        rows = db.fetch_dicts(
-            conn,
-            """SELECT m.id_movimiento, m.fecha_movimiento, m.tipo_flujo, m.monto_absoluto, m.glosa_movimiento,
-                      cp.nombre_cuenta AS cuenta_tesoreria, t.razon_social AS tercero, c.nombre_cc AS centro_costo
-               FROM tbl_movimientos_caja m
-               LEFT JOIN cat_plan_cuentas cp ON cp.id_cuenta = m.id_cuenta_bancaria
-               LEFT JOIN tbl_terceros t ON t.id_tercero = m.id_tercero
-               LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = m.id_centro_costo
-               ORDER BY m.fecha_movimiento DESC, m.id_movimiento DESC
-               OFFSET 0 ROWS FETCH NEXT 200 ROWS ONLY""",
-        )
-        conn.close()
-        return jsonify(rows)
-
-    rows = conn.execute(
-        """SELECT m.*, t.razon_social AS tercero, c.nombre AS centro_costo
-           FROM tbl_movimientos_caja m
-           LEFT JOIN tbl_terceros t ON t.id_tercero = m.id_tercero
-           LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = m.id_centro_costo
-           ORDER BY m.fecha_movimiento DESC, m.id_movimiento DESC
-           LIMIT 200"""
-    ).fetchall()
+        sql = """SELECT m.id_movimiento, m.fecha_movimiento, m.tipo_flujo, m.monto_absoluto, m.glosa_movimiento,
+                         cp.nombre_cuenta AS cuenta_tesoreria, t.razon_social AS tercero, c.nombre_cc AS centro_costo
+                  FROM tbl_movimientos_caja m
+                  LEFT JOIN cat_plan_cuentas cp ON cp.id_cuenta = m.id_cuenta_bancaria
+                  LEFT JOIN tbl_terceros t ON t.id_tercero = m.id_tercero
+                  LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = m.id_centro_costo
+                  ORDER BY m.fecha_movimiento DESC, m.id_movimiento DESC"""
+        if limite:
+            sql += " OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY"
+            rows = db.fetch_dicts(conn, sql, (limite,))
+        else:
+            rows = db.fetch_dicts(conn, sql)
+    else:
+        sql = """SELECT m.*, t.razon_social AS tercero, c.nombre AS centro_costo
+                  FROM tbl_movimientos_caja m
+                  LEFT JOIN tbl_terceros t ON t.id_tercero = m.id_tercero
+                  LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = m.id_centro_costo
+                  ORDER BY m.fecha_movimiento DESC, m.id_movimiento DESC"""
+        if limite:
+            sql += f" LIMIT {int(limite)}"
+        rows = rows_to_dicts(conn.execute(sql).fetchall())
     conn.close()
-    return jsonify(rows_to_dicts(rows))
+    return rows
+
+
+@app.route("/api/caja", methods=["GET"])
+def listar_caja():
+    return jsonify(_obtener_caja(limite=200))
+
+
+@app.route("/api/caja/export", methods=["GET"])
+def exportar_caja():
+    filas = _obtener_caja()
+    columnas = [
+        ("Fecha", "fecha_movimiento", None),
+        ("Tipo", "tipo_flujo", None),
+        ("Monto", "monto_absoluto", excel_export.FORMATO_MONEDA),
+        ("Glosa", "glosa_movimiento", None),
+    ]
+    if db.DB_ENGINE == "mssql":
+        columnas.append(("Cuenta Tesorería", "cuenta_tesoreria", None))
+    columnas += [("Tercero", "tercero", None), ("Centro de Costo", "centro_costo", None)]
+
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_tabla(wb, "Caja", columnas, filas)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("caja"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/api/caja", methods=["POST"])

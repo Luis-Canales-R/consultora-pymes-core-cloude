@@ -92,7 +92,7 @@ h2 { margin-top: 0; }
   gap: 12px;
   flex-wrap: wrap;
 }
-.panel-header h3 { margin: 0; }
+.panel-header h2, .panel-header h3 { margin: 0; }
 
 .btn-export {
   display: inline-flex;

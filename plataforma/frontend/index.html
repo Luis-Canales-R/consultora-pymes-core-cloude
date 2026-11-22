@@ -83,7 +83,10 @@
 
     <!-- VENTAS -->
     <section id="view-ventas" class="view">
-      <h2>Ventas Devengadas</h2>
+      <div class="panel-header">
+        <h2>Ventas Devengadas</h2>
+        <a class="btn-export" href="/api/ventas/export" download>⬇ Descargar Excel</a>
+      </div>
       <form id="form-venta" class="form-grid">
         <label>Folio factura <input name="folio_factura" required></label>
         <label>Cliente
@@ -129,7 +132,10 @@
 
     <!-- COMPRAS -->
     <section id="view-compras" class="view">
-      <h2>Compras y Gastos</h2>
+      <div class="panel-header">
+        <h2>Compras y Gastos</h2>
+        <a class="btn-export" href="/api/compras/export" download>⬇ Descargar Excel</a>
+      </div>
       <form id="form-compra" class="form-grid">
         <label>Folio documento <input name="folio_oc" required></label>
         <label>Proveedor
@@ -177,7 +183,10 @@
 
     <!-- CAJA -->
     <section id="view-caja" class="view">
-      <h2>Movimientos de Caja</h2>
+      <div class="panel-header">
+        <h2>Movimientos de Caja</h2>
+        <a class="btn-export" href="/api/caja/export" download>⬇ Descargar Excel</a>
+      </div>
       <form id="form-caja" class="form-grid">
         <label>Fecha <input type="date" name="fecha_movimiento" required></label>
         <label>Tipo

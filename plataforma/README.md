@@ -334,12 +334,43 @@ sintéticos que imitan las columnas reales de `mssql` (incluyendo los
 joins de Productos) vía el test client de Flask — no validado todavía
 por el usuario contra su SQL Server real.
 
+### Exportación a Excel (Fase 3: transaccionales)
+
+Ventas, Compras y Caja tienen el mismo botón "⬇ Descargar Excel":
+
+- `GET /api/ventas/export`
+- `GET /api/compras/export`
+- `GET /api/caja/export`
+
+**Nivel de detalle**: a diferencia de los Catálogos, Ventas y Compras se
+exportan a **nivel de ítem/línea en `mssql`** (una fila por línea del
+documento, con el folio repetido) — no a nivel de encabezado como la
+tabla que se ve en pantalla. Esta decisión es deliberada: es el mismo
+nivel de detalle que va a necesitar la plantilla de carga masiva de la
+Fase 5, por el principio de simetría export/import del plan del
+proyecto (así el usuario puede exportar, editar en Excel, y más adelante
+volver a cargar con el mismo formato). En SQLite (demo) se exporta a
+nivel de encabezado, porque ese esquema simplificado no tiene tablas de
+detalle (`tbl_ventas_detalle`/`tbl_compras_detalle` solo existen en el
+esquema `mssql`). Compras solo cubre ítems del catálogo de Productos/
+Servicios (no insumos/materia prima — ver Tarea #48 del backlog), igual
+que el formulario web. Caja se exporta a nivel de movimiento en ambos
+motores (no tiene líneas), sin el límite de 200 filas que sí tiene su
+tabla en pantalla.
+
+Probado contra SQLite real (crear venta/compra/movimiento de caja por
+API y confirmar en el Excel descargado) y con datos sintéticos que
+imitan las columnas reales de `mssql` (incluyendo el join a nivel de
+línea) vía el test client de Flask — no validado todavía por el usuario
+contra su SQL Server real.
+
 ### Pendiente
 
-- Exportación masiva de módulos transaccionales (Ventas, Compras, Caja),
-  y carga masiva de todos los módulos (plantilla descargable, validación
+- Carga masiva de todos los módulos (plantilla descargable, validación
   fila por fila, reporte de errores) — ver el documento de plan del
-  proyecto para el orden de fases y los riesgos de cada una.
+  proyecto para el orden de fases y los riesgos de cada una (Compras/
+  Ventas/Caja requieren generar el mismo asiento contable automático que
+  ya generan sus stored procedures).
 - Flujo de Caja Proyectado (control de liquidez): no implementado todavía
   — ver el documento de plan del proyecto para el alcance y los pasos
   propuestos (requiere resolver la trazabilidad Caja↔documento y agregar
