@@ -525,7 +525,11 @@ function initAccionesMasivas(modulo, tablaSelector, endpointBase, msgElId) {
   const contador = barra.querySelector(".contador-seleccion");
 
   function filasCheckbox() {
-    return Array.from(tabla.querySelectorAll('tbody input[data-accion="seleccionar-fila"]'));
+    // Solo las filas VISIBLES (offsetParent es null en una fila con
+    // display:none) -- así "seleccionar todos" y el contador respetan el
+    // filtro de búsqueda en vez de contar filas escondidas por el buscador.
+    return Array.from(tabla.querySelectorAll('tbody input[data-accion="seleccionar-fila"]'))
+      .filter((c) => c.offsetParent !== null);
   }
 
   function actualizar() {
@@ -568,6 +572,39 @@ function initAccionesMasivas(modulo, tablaSelector, endpointBase, msgElId) {
   });
 
   _resetSeleccionesMasivas.push(actualizar);
+}
+
+function quitarAcentos(s) {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+// Funciones de filtrado de cada tabla (una por catálogo); loadCatalogos()
+// las vuelve a aplicar después de reconstruir las filas, para que el texto
+// ya escrito en el buscador siga filtrando la tabla recién actualizada (ej.
+// después de editar o desactivar un registro).
+const _filtrosTabla = [];
+
+// Buscador en vivo sobre una tabla de catálogo: filtra filas por texto (sin
+// distinguir mayúsculas/minúsculas ni tildes) contra todo el contenido de la
+// fila, sin tener que ir a una pantalla de búsqueda aparte.
+function initBusquedaTabla(inputId, tablaSelector) {
+  const input = document.getElementById(inputId);
+  const tabla = document.querySelector(tablaSelector);
+  if (!input || !tabla) return;
+
+  const aplicar = () => {
+    const q = quitarAcentos(input.value.trim().toLowerCase());
+    tabla.querySelectorAll("tbody tr").forEach((tr) => {
+      const texto = quitarAcentos(tr.textContent.toLowerCase());
+      tr.style.display = !q || texto.includes(q) ? "" : "none";
+    });
+    // El filtro puede esconder filas seleccionadas -- el contador y
+    // "seleccionar todos" de las acciones masivas deben reflejarlo.
+    _resetSeleccionesMasivas.forEach((fn) => fn());
+  };
+
+  input.addEventListener("input", aplicar);
+  _filtrosTabla.push(aplicar);
 }
 
 async function loadCatalogos() {
@@ -630,9 +667,15 @@ async function loadCatalogos() {
     tCentros.appendChild(tr);
   });
 
-  // Reconstruir las filas (arriba) pierde el estado de los checkboxes, así
-  // que la selección y el botón "Desactivar seleccionados" se resetean.
-  _resetSeleccionesMasivas.forEach((fn) => fn());
+  // Reconstruir las filas (arriba) pierde el estado de los checkboxes Y el
+  // filtro de búsqueda (todas las filas nuevas empiezan visibles) -- se
+  // reaplica el texto que ya estaba escrito en el buscador de cada tabla
+  // (esto también dispara el reseteo de la selección masiva, ver _filtrosTabla).
+  if (_filtrosTabla.length) {
+    _filtrosTabla.forEach((fn) => fn());
+  } else {
+    _resetSeleccionesMasivas.forEach((fn) => fn());
+  }
 }
 
 // Pone un formulario de alta en "modo edición": cambia el texto del botón,
@@ -1005,6 +1048,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initAccionesMasivas("terceros", "#tabla-terceros", "/terceros", "msg-tercero");
   initAccionesMasivas("productos", "#tabla-productos", "/productos", "msg-producto");
   initAccionesMasivas("centros_costo", "#tabla-centros", "/centros_costo", "msg-centro");
+  initBusquedaTabla("buscar-terceros", "#tabla-terceros");
+  initBusquedaTabla("buscar-productos", "#tabla-productos");
+  initBusquedaTabla("buscar-centros", "#tabla-centros");
   const onCargaMasivaOk = () => {
     loadCatalogos();
     refreshCatalogCaches();

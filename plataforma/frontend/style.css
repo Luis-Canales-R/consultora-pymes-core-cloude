@@ -177,12 +177,51 @@ h2 { margin-top: 0; }
   font-weight: 600;
   border-bottom: 1px solid var(--line);
   padding: 8px 10px;
+  background: #fff;
 }
 .data-table td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
 }
 .data-table tbody tr:hover { background: #fafbfc; }
+
+/* Lista acotada en altura (~20 filas visibles) con scroll interno y
+   encabezado fijo -- a pedido explícito del usuario, para que la tabla no
+   "invada" el resto de la página cuando el catálogo tiene muchos registros. */
+.tabla-scroll {
+  max-height: 560px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-top: 8px;
+}
+.tabla-scroll .data-table { font-size: 13px; }
+.tabla-scroll .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-shadow: 0 1px 0 var(--line);
+}
+.tabla-scroll .data-table tbody tr:last-child td { border-bottom: none; }
+
+.tabla-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+.buscar-tabla {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13.5px;
+  min-width: 240px;
+  flex: 1 1 240px;
+  max-width: 360px;
+}
+.tabla-toolbar .acciones-masivas { margin-top: 0; }
 
 .carga-masiva {
   margin-top: 18px;

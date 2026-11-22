@@ -450,6 +450,33 @@ Probado contra SQLite real y con la conexión `mssql` simulada (incluyendo
 el caso de Centros de Costo, que usa la columna `es_activo` en vez de
 `estado_activo`).
 
+### Buscador y lista acotada en las tablas de Catálogos
+
+Agregado 2026-11-22 a pedido explícito del usuario, para no tener que
+desplazarse por listas largas: cada tabla de Catálogos tiene un campo de
+búsqueda arriba (`<input type="search">`, filtra en vivo mientras se
+escribe) y la tabla en sí vive dentro de un contenedor con altura máxima
+y scroll interno (`.tabla-scroll`, ~20 filas visibles, encabezado fijo
+mientras se baja) para que la lista no ocupe más espacio de pantalla del
+que usan plataformas de este tipo.
+
+- El buscador (`initBusquedaTabla` en `app.js`) filtra client-side: oculta
+  (`display: none`) las filas cuyo texto completo no contenga lo escrito,
+  sin distinguir mayúsculas/minúsculas ni tildes. No llama al backend — es
+  instantáneo sobre lo que ya está cargado en pantalla.
+- La selección masiva (checkboxes + "seleccionar todos" + contador) solo
+  cuenta las filas visibles, así que buscar y luego usar "seleccionar
+  todos" selecciona solo lo que el filtro muestra, no la tabla completa.
+- Al editar/desactivar un registro (lo que recarga la tabla), el filtro de
+  búsqueda que ya estaba escrito se vuelve a aplicar automáticamente sobre
+  las filas nuevas.
+
+Probado sirviendo la página (estructura HTML/CSS/JS, balance de tags,
+`app.js` parseable) — la interacción en el navegador (escribir en el
+buscador, scrollear la lista, filtrar + seleccionar) queda para que el
+usuario la confirme visualmente, ya que este entorno no tiene un
+navegador real para probarla.
+
 ### Editar y desactivar catálogos
 
 Cada fila de las tablas de Terceros, Productos/Servicios y Centros de
