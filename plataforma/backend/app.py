@@ -1565,7 +1565,6 @@ def exportar_compras():
     )
 
 
-@app.route("/api/compras", methods=["POST"])
 def _ejecutar_linea_compra_mssql(conn, folio, fecha, nombre_proveedor, nombre_producto,
                                   cantidad, precio_unitario, estado_oc, id_centro_costo,
                                   id_asiento_existente):
