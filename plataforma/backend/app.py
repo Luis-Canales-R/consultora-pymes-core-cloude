@@ -2847,8 +2847,12 @@ def exportar_cascada_resultados():
 # real) y la convención de catálogo que requiere: para que la compra de
 # un honorario real "regularice" lo aplicado en vez de duplicar el gasto,
 # el Producto/Servicio que representa ese honorario real debe tener su
-# id_cuenta_costo_gasto apuntando DIRECTO a la cuenta 2125 (Honorarios
-# Profesionales por Pagar), no a 5113.
+# id_cuenta_clearing_compra (sql/agregar_cuenta_clearing_compra_productos.sql)
+# apuntando a la cuenta 2125 (Honorarios Profesionales por Pagar). NO usar
+# id_cuenta_costo_gasto para esto -- ese campo también lo lee
+# sp_procesar_venta_externa (rama SERVICIO) para el costo estándar de la
+# propia venta, y apuntarlo a 2125 anula ese efecto (ver corrección en
+# Hallazgo #21).
 # ---------------------------------------------------------------------------
 
 @app.route("/api/cierre/variacion-honorarios/saldo-pendiente", methods=["GET"])

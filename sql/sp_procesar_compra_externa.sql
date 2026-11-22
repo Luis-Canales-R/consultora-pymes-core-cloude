@@ -67,6 +67,7 @@ BEGIN
     DECLARE @id_item_oficial INT;
     DECLARE @aplica_iva BIT;
     DECLARE @id_cuenta_costo_gasto INT;
+    DECLARE @id_cuenta_clearing_compra INT;  -- Fase 6: ver sql/agregar_cuenta_clearing_compra_productos.sql
     DECLARE @modo_obtencion VARCHAR(20);
     DECLARE @id_orden_compra INT;
     DECLARE @subtotal_neto DECIMAL(18,2);
@@ -92,6 +93,7 @@ BEGIN
         -- 2. Validación y Homologación de Producto / Servicio comprado
         SELECT @id_item_oficial = p.id_item, @aplica_iva = p.aplica_iva,
                @id_cuenta_costo_gasto = ISNULL(p.id_cuenta_costo_gasto, 5111),
+               @id_cuenta_clearing_compra = p.id_cuenta_clearing_compra,
                @modo_obtencion = p.modo_obtencion
         FROM map_productos mp
         INNER JOIN tbl_productos_servicios p ON mp.id_item_oficial = p.id_item
@@ -200,9 +202,13 @@ BEGIN
             ELSE
             BEGIN
                 -- Ítem no inventariable (FABRICADO / SERVICIO / sin clasificar):
-                -- va directo a Costo/Gasto, sin pasar por el kardex.
+                -- va directo a Costo/Gasto, sin pasar por el kardex. Si el
+                -- ítem tiene configurada una cuenta de "clearing" (Fase 6:
+                -- honorarios reales que deben cancelar el pasivo aplicado a
+                -- estándar en la venta, en vez de duplicar el gasto), se
+                -- debita esa cuenta en su lugar.
                 INSERT INTO @lineas_compra_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                VALUES (@id_cuenta_costo_gasto, @subtotal_neto, 0.00, @id_centro_costo, 'Gasto Compra ' + @folio_oc);
+                VALUES (ISNULL(@id_cuenta_clearing_compra, @id_cuenta_costo_gasto), @subtotal_neto, 0.00, @id_centro_costo, 'Gasto Compra ' + @folio_oc);
             END
 
             IF @monto_iva > 0
