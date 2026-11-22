@@ -41,11 +41,25 @@ SCHEMA_PATH = os.path.join(BASE_DIR, "schema_sqlite.sql")
 DB_ENGINE = os.environ.get("DB_ENGINE", "sqlite")
 
 
+def _migrar_sqlite(conn):
+    """Migraciones aditivas para bases sqlite creadas con una versión
+    anterior de schema_sqlite.sql (que no tenían columnas agregadas
+    después, ej. tbl_centros_costo.estado_activo -- necesaria para poder
+    desactivar un centro de costo desde la plataforma). No hace nada si la
+    columna ya existe. Solo aplica a sqlite: en mssql el esquema real ya
+    la tiene desde el principio (ver /sql)."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(tbl_centros_costo)").fetchall()}
+    if cols and "estado_activo" not in cols:
+        conn.execute("ALTER TABLE tbl_centros_costo ADD COLUMN estado_activo INTEGER NOT NULL DEFAULT 1")
+        conn.commit()
+
+
 def get_conn():
     if DB_ENGINE == "sqlite":
         conn = sqlite3.connect(SQLITE_PATH)
         conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
+        _migrar_sqlite(conn)
         return conn
 
     if DB_ENGINE == "mssql":

@@ -212,6 +212,30 @@ h2 { margin-top: 0; }
 .reporte-carga p.err { color: #c23a3a; font-size: 13.5px; margin: 4px 0; }
 .reporte-carga .data-table { font-size: 12.5px; }
 
+td.acciones { white-space: nowrap; }
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+  text-decoration: underline;
+}
+.btn-link:hover { opacity: 0.8; }
+.btn-link-danger { color: #c23a3a; }
+.btn-cancelar-edicion {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--quiet);
+  height: 36px;
+}
+.btn-cancelar-edicion:hover { background: #fafbfc; }
+
 .totales-linea {
   font-size: 14px;
   margin: 10px 0;

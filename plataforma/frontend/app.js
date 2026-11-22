@@ -34,6 +34,24 @@ async function apiPost(path, payload) {
   return data;
 }
 
+async function apiPut(path, payload) {
+  const res = await fetch(`${API}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Error al guardar los cambios");
+  return data;
+}
+
+async function apiDelete(path) {
+  const res = await fetch(`${API}${path}`, { method: "DELETE" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Error al desactivar");
+  return data;
+}
+
 function showMsg(elId, text, ok = true) {
   const el = document.getElementById(elId);
   if (!el) return;
@@ -484,12 +502,19 @@ function initFormCaja() {
 // Catálogos (terceros, productos, centros de costo)
 // ---------------------------------------------------------------------------
 
+// Cache de la última carga de cada catálogo (para poblar el formulario al
+// editar sin tener que volver a pedir el registro al backend).
+const _catalogos = { terceros: [], productos: [], centros: [] };
+
 async function loadCatalogos() {
   const [terceros, productos, centros] = await Promise.all([
     apiGet("/terceros"),
     apiGet("/productos"),
     apiGet("/centros_costo"),
   ]);
+  _catalogos.terceros = terceros;
+  _catalogos.productos = productos;
+  _catalogos.centros = centros;
 
   const tTerceros = document.querySelector("#tabla-terceros tbody");
   tTerceros.innerHTML = "";
@@ -500,7 +525,11 @@ async function loadCatalogos() {
       <td>${t.razon_social}</td>
       <td>${t.rut_dni}</td>
       <td>${t.es_cliente ? "✓" : "—"}</td>
-      <td>${t.es_proveedor ? "✓" : "—"}</td>`;
+      <td>${t.es_proveedor ? "✓" : "—"}</td>
+      <td class="acciones">
+        <button type="button" class="btn-link" data-accion="editar" data-id="${t.id_tercero}">Editar</button>
+        <button type="button" class="btn-link btn-link-danger" data-accion="desactivar" data-id="${t.id_tercero}">Desactivar</button>
+      </td>`;
     tTerceros.appendChild(tr);
   });
 
@@ -513,7 +542,11 @@ async function loadCatalogos() {
       <td>${p.nombre}</td>
       <td>${fmtMoney(p.precio_venta_base)}</td>
       <td>${p.modo_obtencion || "(sin clasificar)"}</td>
-      <td>${p.aplica_iva === false || p.aplica_iva === 0 ? "Exento" : "Afecto"}</td>`;
+      <td>${p.aplica_iva === false || p.aplica_iva === 0 ? "Exento" : "Afecto"}</td>
+      <td class="acciones">
+        <button type="button" class="btn-link" data-accion="editar" data-id="${p.id_item}">Editar</button>
+        <button type="button" class="btn-link btn-link-danger" data-accion="desactivar" data-id="${p.id_item}">Desactivar</button>
+      </td>`;
     tProductos.appendChild(tr);
   });
 
@@ -521,18 +554,61 @@ async function loadCatalogos() {
   tCentros.innerHTML = "";
   centros.forEach((c) => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${c.nombre}</td>`;
+    tr.innerHTML = `
+      <td>${c.nombre}</td>
+      <td class="acciones">
+        <button type="button" class="btn-link" data-accion="editar" data-id="${c.id_centro_costo}">Editar</button>
+        <button type="button" class="btn-link btn-link-danger" data-accion="desactivar" data-id="${c.id_centro_costo}">Desactivar</button>
+      </td>`;
     tCentros.appendChild(tr);
   });
 }
 
+// Pone un formulario de alta en "modo edición": cambia el texto del botón,
+// agrega un botón "Cancelar" y recuerda qué id se está editando (en
+// form.dataset.editingId) para que el submit decida POST (alta) vs.
+// PUT (edición).
+function entrarModoEdicion(form, id, boton, onCancelar) {
+  form.dataset.editingId = id;
+  boton.textContent = "Guardar cambios";
+  let btnCancelar = form.querySelector(".btn-cancelar-edicion");
+  if (!btnCancelar) {
+    btnCancelar = document.createElement("button");
+    btnCancelar.type = "button";
+    btnCancelar.className = "btn-cancelar-edicion";
+    btnCancelar.textContent = "Cancelar";
+    boton.insertAdjacentElement("afterend", btnCancelar);
+  }
+  btnCancelar.onclick = () => {
+    delete form.dataset.editingId;
+    form.reset();
+    boton.textContent = boton.dataset.textoAlta;
+    btnCancelar.remove();
+    if (onCancelar) onCancelar();
+  };
+}
+
 function initFormTercero() {
   const form = document.getElementById("form-tercero");
+  const boton = form.querySelector("button[type=submit]");
+  boton.dataset.textoAlta = boton.textContent;
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const payload = formToPayload(form);
+    const editingId = form.dataset.editingId;
     try {
-      await apiPost("/terceros", formToPayload(form));
-      showMsg("msg-tercero", "Tercero agregado.");
+      if (editingId) {
+        await apiPut(`/terceros/${editingId}`, payload);
+        showMsg("msg-tercero", "Tercero actualizado.");
+      } else {
+        await apiPost("/terceros", payload);
+        showMsg("msg-tercero", "Tercero agregado.");
+      }
+      delete form.dataset.editingId;
+      boton.textContent = boton.dataset.textoAlta;
+      const btnCancelar = form.querySelector(".btn-cancelar-edicion");
+      if (btnCancelar) btnCancelar.remove();
       form.reset();
       loadCatalogos();
       refreshCatalogCaches();
@@ -540,35 +616,139 @@ function initFormTercero() {
       showMsg("msg-tercero", err.message, false);
     }
   });
+
+  document.querySelector("#tabla-terceros tbody").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-accion]");
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.accion === "editar") {
+      const t = _catalogos.terceros.find((x) => x.id_tercero === id);
+      if (!t) return;
+      form.codigo_tercero.value = t.codigo_tercero || "";
+      form.razon_social.value = t.razon_social || "";
+      form.rut_dni.value = t.rut_dni || "";
+      form.contacto_email.value = t.contacto_email || "";
+      form.es_cliente.checked = !!t.es_cliente;
+      form.es_proveedor.checked = !!t.es_proveedor;
+      entrarModoEdicion(form, id, boton);
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (btn.dataset.accion === "desactivar") {
+      if (!confirm("¿Desactivar este tercero? Deja de aparecer en listados y selectores, pero no se borra ni afecta a sus movimientos ya registrados.")) return;
+      try {
+        await apiDelete(`/terceros/${id}`);
+        loadCatalogos();
+        refreshCatalogCaches();
+      } catch (err) {
+        showMsg("msg-tercero", err.message, false);
+      }
+    }
+  });
 }
 
 function initFormProducto() {
   const form = document.getElementById("form-producto");
+  const boton = form.querySelector("button[type=submit]");
+  boton.dataset.textoAlta = boton.textContent;
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const payload = formToPayload(form);
+    const editingId = form.dataset.editingId;
     try {
-      await apiPost("/productos", formToPayload(form));
-      showMsg("msg-producto", "Producto agregado.");
+      if (editingId) {
+        await apiPut(`/productos/${editingId}`, payload);
+        showMsg("msg-producto", "Producto actualizado.");
+      } else {
+        await apiPost("/productos", payload);
+        showMsg("msg-producto", "Producto agregado.");
+      }
+      delete form.dataset.editingId;
+      boton.textContent = boton.dataset.textoAlta;
+      const btnCancelar = form.querySelector(".btn-cancelar-edicion");
+      if (btnCancelar) btnCancelar.remove();
       form.reset();
       loadCatalogos();
+      refreshCatalogCaches();
     } catch (err) {
       showMsg("msg-producto", err.message, false);
+    }
+  });
+
+  document.querySelector("#tabla-productos tbody").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-accion]");
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.accion === "editar") {
+      const p = _catalogos.productos.find((x) => x.id_item === id);
+      if (!p) return;
+      form.sku_codigo.value = p.sku_codigo || "";
+      form.nombre.value = p.nombre || "";
+      form.precio_venta_base.value = p.precio_venta_base || "";
+      form.modo_obtencion.value = p.modo_obtencion || "";
+      form.aplica_iva.checked = !(p.aplica_iva === false || p.aplica_iva === 0);
+      entrarModoEdicion(form, id, boton);
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (btn.dataset.accion === "desactivar") {
+      if (!confirm("¿Desactivar este producto/servicio? Deja de aparecer en listados y selectores, pero no se borra ni afecta a ventas/compras ya registradas.")) return;
+      try {
+        await apiDelete(`/productos/${id}`);
+        loadCatalogos();
+        refreshCatalogCaches();
+      } catch (err) {
+        showMsg("msg-producto", err.message, false);
+      }
     }
   });
 }
 
 function initFormCentro() {
   const form = document.getElementById("form-centro");
+  const boton = form.querySelector("button[type=submit]");
+  boton.dataset.textoAlta = boton.textContent;
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const payload = formToPayload(form);
+    const editingId = form.dataset.editingId;
     try {
-      await apiPost("/centros_costo", formToPayload(form));
-      showMsg("msg-centro", "Centro de costo agregado.");
+      if (editingId) {
+        await apiPut(`/centros_costo/${editingId}`, payload);
+        showMsg("msg-centro", "Centro de costo actualizado.");
+      } else {
+        await apiPost("/centros_costo", payload);
+        showMsg("msg-centro", "Centro de costo agregado.");
+      }
+      delete form.dataset.editingId;
+      boton.textContent = boton.dataset.textoAlta;
+      const btnCancelar = form.querySelector(".btn-cancelar-edicion");
+      if (btnCancelar) btnCancelar.remove();
       form.reset();
       loadCatalogos();
       refreshCatalogCaches();
     } catch (err) {
       showMsg("msg-centro", err.message, false);
+    }
+  });
+
+  document.querySelector("#tabla-centros tbody").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-accion]");
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+    if (btn.dataset.accion === "editar") {
+      const c = _catalogos.centros.find((x) => x.id_centro_costo === id);
+      if (!c) return;
+      form.nombre.value = c.nombre || "";
+      entrarModoEdicion(form, id, boton);
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (btn.dataset.accion === "desactivar") {
+      if (!confirm("¿Desactivar este centro de costo? Deja de aparecer en listados y selectores, pero no se borra ni afecta a movimientos ya registrados.")) return;
+      try {
+        await apiDelete(`/centros_costo/${id}`);
+        loadCatalogos();
+        refreshCatalogCaches();
+      } catch (err) {
+        showMsg("msg-centro", err.message, false);
+      }
     }
   });
 }

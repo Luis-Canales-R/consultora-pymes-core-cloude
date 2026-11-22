@@ -27,7 +27,8 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS tbl_centros_costo (
     id_centro_costo INTEGER PRIMARY KEY AUTOINCREMENT,
-    nombre          TEXT NOT NULL UNIQUE
+    nombre          TEXT NOT NULL UNIQUE,
+    estado_activo   INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS tbl_terceros (

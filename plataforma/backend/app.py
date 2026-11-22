@@ -270,6 +270,96 @@ def carga_masiva_terceros():
     return jsonify(reporte)
 
 
+def _homologar_nombre(conn, tabla_map, col_nombre, col_id_oficial, id_oficial, nombre_nuevo, activar_si_falta):
+    """Mantiene sincronizada la homologación 1:1 (map_clientes / map_productos)
+    cuando se edita el nombre de un tercero/producto -- ver Hallazgo del
+    plan: sp_procesar_venta_externa / sp_procesar_compra_externa resuelven
+    al tercero/producto buscando por el NOMBRE vigente en tbl_terceros /
+    tbl_productos_servicios contra esa tabla de homologación, así que un
+    rename sin sincronizar esto dejaría la venta/compra futura sin poder
+    encontrar al tercero/producto ("no se encuentra homologado").
+    activar_si_falta: si no existe fila de homologación para este id y
+    corresponde que exista (ej. ahora es_cliente/es_proveedor), la crea."""
+    fila = db.fetch_one_dict(
+        conn, f"SELECT 1 FROM {tabla_map} WHERE {col_id_oficial} = ?", (id_oficial,)
+    )
+    if fila:
+        conn.execute(
+            f"UPDATE {tabla_map} SET {col_nombre} = ? WHERE {col_id_oficial} = ?",
+            (nombre_nuevo, id_oficial),
+        )
+    elif activar_si_falta:
+        conn.execute(
+            f"INSERT INTO {tabla_map} ({col_nombre}, {col_id_oficial}) VALUES (?, ?)",
+            (nombre_nuevo, id_oficial),
+        )
+
+
+@app.route("/api/terceros/<int:id_tercero>", methods=["PUT"])
+def editar_tercero(id_tercero):
+    payload = request.get_json(force=True)
+    missing = require_fields(payload, ["razon_social", "rut_dni"])
+    if missing:
+        return error(missing)
+    conn = db.get_conn()
+    try:
+        if db.DB_ENGINE == "mssql":
+            # COALESCE: si no se informa código, se conserva el actual (NO
+            # se autogenera uno nuevo como en el alta -- eso cambiaría el
+            # código de un tercero ya en uso sin que el usuario lo pidiera).
+            conn.execute(
+                """UPDATE tbl_terceros SET codigo_tercero = COALESCE(?, codigo_tercero),
+                   razon_social = ?, rut_dni = ?, contacto_email = ? WHERE id_tercero = ?""",
+                (payload.get("codigo_tercero"), payload["razon_social"],
+                 payload["rut_dni"], payload.get("contacto_email"), id_tercero),
+            )
+            # Roles: se recalculan completos (borrar + reinsertar) en vez de
+            # diffear uno por uno -- más simple y el volumen por tercero es
+            # mínimo (a lo más 2 filas: cliente/proveedor).
+            conn.execute("DELETE FROM rel_terceros_roles WHERE id_tercero = ?", (id_tercero,))
+            if payload.get("es_cliente"):
+                conn.execute("INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
+                             (id_tercero, ROL_CLIENTE))
+            if payload.get("es_proveedor"):
+                conn.execute("INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
+                             (id_tercero, ROL_PROVEEDOR))
+            _homologar_nombre(
+                conn, "map_clientes", "nombre_informal_excel", "id_tercero_oficial",
+                id_tercero, payload["razon_social"],
+                activar_si_falta=bool(payload.get("es_cliente") or payload.get("es_proveedor")),
+            )
+        else:
+            conn.execute(
+                """UPDATE tbl_terceros SET codigo_tercero = COALESCE(?, codigo_tercero),
+                   razon_social = ?, rut_dni = ?, contacto_email = ?, es_cliente = ?, es_proveedor = ?
+                   WHERE id_tercero = ?""",
+                (payload.get("codigo_tercero"), payload["razon_social"], payload["rut_dni"],
+                 payload.get("contacto_email"), 1 if payload.get("es_cliente") else 0,
+                 1 if payload.get("es_proveedor") else 0, id_tercero),
+            )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo editar el tercero: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/terceros/<int:id_tercero>", methods=["DELETE"])
+def desactivar_tercero(id_tercero):
+    conn = db.get_conn()
+    try:
+        conn.execute("UPDATE tbl_terceros SET estado_activo = 0 WHERE id_tercero = ?", (id_tercero,))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo desactivar el tercero: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
+
+
 def _obtener_productos():
     """Factorizado para que lo use tanto el endpoint JSON (listar_productos)
     como el de exportación a Excel, sin duplicar la consulta."""
@@ -466,6 +556,58 @@ def carga_masiva_productos():
     return jsonify(reporte)
 
 
+@app.route("/api/productos/<int:id_item>", methods=["PUT"])
+def editar_producto(id_item):
+    payload = request.get_json(force=True)
+    missing = require_fields(payload, ["nombre", "precio_venta_base"])
+    if missing:
+        return error(missing)
+    conn = db.get_conn()
+    try:
+        if db.DB_ENGINE == "mssql":
+            modo = payload.get("modo_obtencion") or None
+            aplica_iva = 0 if payload.get("aplica_iva") is False else 1
+            conn.execute(
+                """UPDATE tbl_productos_servicios SET sku_codigo = COALESCE(?, sku_codigo),
+                   nombre = ?, precio_venta_base = ?, aplica_iva = ?, modo_obtencion = ?
+                   WHERE id_item = ?""",
+                (payload.get("sku_codigo"), payload["nombre"], payload["precio_venta_base"],
+                 aplica_iva, modo, id_item),
+            )
+            _homologar_nombre(
+                conn, "map_productos", "descripcion_libre_excel", "id_item_oficial",
+                id_item, payload["nombre"], activar_si_falta=True,
+            )
+        else:
+            conn.execute(
+                """UPDATE tbl_productos_servicios SET sku_codigo = COALESCE(?, sku_codigo),
+                   nombre = ?, precio_venta_base = ?, modo_obtencion = ? WHERE id_item = ?""",
+                (payload.get("sku_codigo"), payload["nombre"], payload["precio_venta_base"],
+                 payload.get("modo_obtencion"), id_item),
+            )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo editar el producto: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/productos/<int:id_item>", methods=["DELETE"])
+def desactivar_producto(id_item):
+    conn = db.get_conn()
+    try:
+        conn.execute("UPDATE tbl_productos_servicios SET estado_activo = 0 WHERE id_item = ?", (id_item,))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo desactivar el producto: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
+
+
 def _obtener_centros_costo():
     """Factorizado para que lo use tanto el endpoint JSON (listar_centros_costo)
     como el de exportación a Excel, sin duplicar la consulta."""
@@ -477,7 +619,9 @@ def _obtener_centros_costo():
                FROM tbl_centros_costo WHERE es_activo = 1 ORDER BY nombre_cc""",
         )
     else:
-        rows = rows_to_dicts(conn.execute("SELECT * FROM tbl_centros_costo ORDER BY nombre").fetchall())
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM tbl_centros_costo WHERE estado_activo = 1 ORDER BY nombre"
+        ).fetchall())
     conn.close()
     return rows
 
@@ -585,6 +729,51 @@ def carga_masiva_centros_costo():
     finally:
         conn.close()
     return jsonify(reporte)
+
+
+@app.route("/api/centros_costo/<int:id_centro_costo>", methods=["PUT"])
+def editar_centro_costo(id_centro_costo):
+    payload = request.get_json(force=True)
+    missing = require_fields(payload, ["nombre"])
+    if missing:
+        return error(missing)
+    conn = db.get_conn()
+    try:
+        if db.DB_ENGINE == "mssql":
+            conn.execute(
+                "UPDATE tbl_centros_costo SET codigo_cc = COALESCE(?, codigo_cc), nombre_cc = ? WHERE id_centro_costo = ?",
+                (payload.get("codigo_cc"), payload["nombre"], id_centro_costo),
+            )
+        else:
+            conn.execute(
+                "UPDATE tbl_centros_costo SET nombre = ? WHERE id_centro_costo = ?",
+                (payload["nombre"], id_centro_costo),
+            )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo editar el centro de costo: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/centros_costo/<int:id_centro_costo>", methods=["DELETE"])
+def desactivar_centro_costo(id_centro_costo):
+    conn = db.get_conn()
+    try:
+        col_estado = "es_activo" if db.DB_ENGINE == "mssql" else "estado_activo"
+        conn.execute(
+            f"UPDATE tbl_centros_costo SET {col_estado} = 0 WHERE id_centro_costo = ?",
+            (id_centro_costo,),
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo desactivar el centro de costo: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

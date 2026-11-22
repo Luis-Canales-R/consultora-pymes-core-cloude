@@ -408,6 +408,55 @@ el test client de Flask) que confirma que la homologación duplicada y el
 válidas del mismo archivo — no validado todavía por el usuario contra su
 SQL Server real.
 
+### Editar y desactivar catálogos
+
+Cada fila de las tablas de Terceros, Productos/Servicios y Centros de
+Costo tiene botones "Editar" y "Desactivar":
+
+- `PUT /api/terceros/<id>`, `/productos/<id>`, `/centros_costo/<id>`:
+  actualiza el registro. "Editar" llena el formulario de alta con los
+  datos de esa fila y el botón pasa a decir "Guardar cambios" (con un
+  "Cancelar" para volver al modo alta).
+- `DELETE /api/terceros/<id>`, `/productos/<id>`, `/centros_costo/<id>`:
+  **desactiva** el registro (`estado_activo = 0` / `es_activo = 0` en
+  Centros de Costo real), no lo borra. Deja de aparecer en listados,
+  exportaciones y selectores, pero no afecta a ventas/compras/movimientos
+  de caja ya registrados contra ese tercero/producto/centro de costo
+  (sigue existiendo la fila, con su id intacto).
+
+**Por qué no hay un DELETE físico**: terceros, productos y centros de
+costo están referenciados por ventas, compras y movimientos de caja ya
+contabilizados. Borrar la fila rompería esas referencias (o el asiento
+contable histórico). Desactivar es la operación segura y es exactamente
+lo que ya hacían los listados (`WHERE estado_activo = 1`) desde el MVP
+original — esto solo agrega el botón que faltaba para poder apagarla.
+
+**Importante sobre `map_clientes`/`map_productos` (homologación, modo
+`mssql`)**: `sp_procesar_venta_externa`/`sp_procesar_compra_externa`
+resuelven al cliente/proveedor/producto buscando por el NOMBRE vigente
+en `tbl_terceros`/`tbl_productos_servicios` contra esa tabla de
+homologación (ver `sp_procesar_compra_externa.sql`). Si se edita la
+Razón Social o el Nombre, `editar_tercero`/`editar_producto` también
+actualizan (o crean, si no existía) la fila de homologación
+correspondiente para que siga apuntando al mismo registro — si esto no
+se sincronizara, una venta/compra futura fallaría con "no se encuentra
+homologado" después de un simple cambio de nombre.
+
+**Las plantillas de carga masiva (Fase 4) siguen siendo solo de alta,
+no de actualización**: si se vuelve a subir un archivo con el mismo
+RUT/nombre para "corregir" un dato, el sistema crea un registro nuevo
+duplicado, no actualiza el existente. Para corregir un error de una
+carga masiva ya hecha, hay que editar o desactivar cada fila afectada
+desde la tabla (no hay todavía una forma masiva de editar/deshacer).
+
+Probado contra SQLite real (editar nombre/RUT/precio, desactivar y
+confirmar que desaparece del listado) y con una conexión `mssql`
+simulada vía el test client de Flask (edición de Razón Social/Nombre
+sincroniza `map_clientes`/`map_productos` sin duplicar la homologación,
+roles de cliente/proveedor se recalculan correctamente, desactivación de
+Centro de Costo usa `es_activo`) — no validado todavía por el usuario
+contra su SQL Server real.
+
 ### Pendiente
 
 - Carga masiva de los módulos transaccionales (Ventas, Compras, Caja) —
