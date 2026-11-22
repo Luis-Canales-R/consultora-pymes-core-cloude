@@ -2737,6 +2737,106 @@ def exportar_kpis():
     )
 
 
+
+# ---------------------------------------------------------------------------
+# Informes Financieros Avanzados: EBITDA y Estado de Resultados en
+# formato cascada estándar. Requiere cat_plan_cuentas.subclasificacion_resultado
+# (sql/agregar_subclasificacion_resultado.sql).
+# ---------------------------------------------------------------------------
+
+def calcular_cascada_resultados(filas):
+    """filas: list of dicts {subclasificacion_resultado, tipo_cuenta,
+    total} -- una fila por combinación subclasificacion/tipo_cuenta ya
+    agregada en SQL (ej. desde vw_estado_resultados cruzada con
+    cat_plan_cuentas). Funcion pura, testeable sin DB.
+
+    'sin_clasificar' acumula cualquier cuenta de tipo COSTO/GASTO sin
+    subclasificacion_resultado asignada (ej. una cuenta nueva agregada
+    al plan sin declarar este valor -- ver sql/agregar_subclasificacion_resultado.sql).
+    Se resta en la última línea antes de Resultado Neto para que el
+    total de la cascada NUNCA se desvíe del resultado_neto ya validado
+    en el Dashboard/KPIs, aunque quede una cuenta por clasificar.
+    """
+    def total_por(pred):
+        return sum(float(f.get("total") or 0) for f in filas if pred(f))
+
+    ingresos = total_por(lambda f: f["tipo_cuenta"] == "INGRESO")
+    costo_venta = total_por(lambda f: f.get("subclasificacion_resultado") == "COSTO_VENTA")
+    gav = total_por(lambda f: f.get("subclasificacion_resultado") == "GAV")
+    dep_amort = total_por(lambda f: f.get("subclasificacion_resultado") == "DEPRECIACION_AMORTIZACION")
+    financiero = total_por(lambda f: f.get("subclasificacion_resultado") == "FINANCIERO")
+    impuesto = total_por(lambda f: f.get("subclasificacion_resultado") == "IMPUESTO")
+    sin_clasificar = total_por(
+        lambda f: f["tipo_cuenta"] in ("COSTO", "GASTO") and not f.get("subclasificacion_resultado")
+    )
+
+    resultado_bruto = ingresos - costo_venta
+    ebitda = resultado_bruto - gav
+    ebit = ebitda - dep_amort
+    ebt = ebit - financiero
+    resultado_neto = ebt - impuesto - sin_clasificar
+
+    return {
+        "ingresos": ingresos,
+        "costo_venta": costo_venta,
+        "resultado_bruto": resultado_bruto,
+        "gav": gav,
+        "ebitda": ebitda,
+        "depreciacion_amortizacion": dep_amort,
+        "ebit": ebit,
+        "resultado_financiero": financiero,
+        "ebt": ebt,
+        "impuesto_renta": impuesto,
+        "sin_clasificar": sin_clasificar,
+        "resultado_neto": resultado_neto,
+    }
+
+
+def _obtener_cascada_resultados():
+    """Factorizado para que lo use tanto el endpoint JSON como el de
+    exportación a Excel (mismo patrón que _obtener_kpis)."""
+    conn = db.get_conn()
+    filas = db.fetch_dicts(
+        conn,
+        """SELECT cp.subclasificacion_resultado, er.tipo_cuenta,
+                  COALESCE(SUM(er.monto_periodo), 0) AS total
+           FROM vw_estado_resultados er
+           INNER JOIN cat_plan_cuentas cp ON cp.id_cuenta = er.id_cuenta
+           GROUP BY cp.subclasificacion_resultado, er.tipo_cuenta""",
+    )
+    conn.close()
+
+    for f in filas:
+        f["total"] = float(f["total"] or 0)
+
+    return calcular_cascada_resultados(filas)
+
+
+@app.route("/api/informes/estado-resultados-cascada", methods=["GET"])
+def informe_cascada_resultados():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True})
+
+    cascada = _obtener_cascada_resultados()
+    return jsonify({"modo_demo": False, **cascada})
+
+
+@app.route("/api/informes/estado-resultados-cascada/export", methods=["GET"])
+def exportar_cascada_resultados():
+    if db.DB_ENGINE != "mssql":
+        return error("La exportación a Excel requiere el motor contable real (DB_ENGINE=mssql).", 400)
+
+    cascada = _obtener_cascada_resultados()
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_cascada_resultados(wb, cascada)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("estado_resultados_cascada"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 if __name__ == "__main__":
     db.init_db()
     port = int(os.environ.get("PORT", 5000))

@@ -126,6 +126,47 @@ def agregar_hoja_kpis(wb, kpis):
     return ws
 
 
+def agregar_hoja_cascada_resultados(wb, cascada):
+    """Hoja a medida para /api/informes/estado-resultados-cascada: Estado
+    de Resultados en formato cascada estándar (Ventas Netas -> Resultado
+    Bruto -> EBITDA -> EBIT -> EBT -> Resultado Neto). Igual que
+    agregar_hoja_kpis, no encaja en el modelo de columnas homogéneas de
+    agregar_hoja_tabla porque cada línea es un paso de un mismo cálculo,
+    no una fila independiente."""
+    ws = wb.create_sheet(title="Estado de Resultados")
+    _escribir_encabezados(ws, ["Línea", "Monto"])
+
+    filas = [
+        ("Ventas Netas (Ingresos)", cascada["ingresos"], False),
+        ("(-) Costo de Ventas", -cascada["costo_venta"], False),
+        ("= Resultado Bruto", cascada["resultado_bruto"], True),
+        ("(-) Gastos de Administración y Ventas (GAV)", -cascada["gav"], False),
+        ("= EBITDA", cascada["ebitda"], True),
+        ("(-) Depreciación y Amortización", -cascada["depreciacion_amortizacion"], False),
+        ("= EBIT (Resultado Operacional)", cascada["ebit"], True),
+        ("(-/+) Resultado Financiero", -cascada["resultado_financiero"], False),
+        ("= EBT (Resultado antes de Impuesto)", cascada["ebt"], True),
+        ("(-) Impuesto a la Renta", -cascada["impuesto_renta"], False),
+    ]
+    if cascada.get("sin_clasificar"):
+        filas.append((
+            "(-) Gastos/Costos sin sub-clasificar (pendiente en el plan de cuentas)",
+            -cascada["sin_clasificar"],
+            False,
+        ))
+    filas.append(("= Resultado Neto", cascada["resultado_neto"], True))
+
+    for fila_idx, (etiqueta, monto, negrita) in enumerate(filas, start=2):
+        celda_etiqueta = ws.cell(row=fila_idx, column=1, value=etiqueta)
+        if negrita:
+            celda_etiqueta.font = _TOTAL_FONT
+        _escribir_celda(ws, fila_idx, 2, monto, FORMATO_MONEDA, negrita=negrita)
+
+    ws.column_dimensions["A"].width = 46
+    ws.column_dimensions["B"].width = 18
+    return ws
+
+
 def _aplanar_variacion(prefijo, variacion):
     """{'absoluta':.., 'porcentual':..} -> {'prefijo_abs':.., 'prefijo_pct':..}
     para poder meterlo como columnas planas en agregar_hoja_tabla."""

@@ -940,18 +940,51 @@ function fmtPctKpi(n) {
 }
 
 async function loadInformes() {
-  const [balance, comparacion, kpis] = await Promise.all([
+  const [balance, comparacion, kpis, cascada] = await Promise.all([
     apiGet("/informes/balance-8-columnas"),
     apiGet("/informes/comparacion-periodos"),
     apiGet("/informes/kpis"),
+    apiGet("/informes/estado-resultados-cascada"),
   ]);
 
-  const modoDemo = balance.modo_demo || comparacion.modo_demo || kpis.modo_demo;
+  const modoDemo = balance.modo_demo || comparacion.modo_demo || kpis.modo_demo || cascada.modo_demo;
   document.getElementById("informes-modo-demo").style.display = modoDemo ? "" : "none";
   document.getElementById("panel-kpis").style.display = modoDemo ? "none" : "";
+  document.getElementById("panel-cascada-resultados").style.display = modoDemo ? "none" : "";
   document.getElementById("panel-comparacion-periodos").style.display = modoDemo ? "none" : "";
   document.getElementById("panel-balance-8-columnas").style.display = modoDemo ? "none" : "";
   if (modoDemo) return;
+
+  // --- EBITDA / Estado de Resultados en cascada ---
+  const filasCascada = [
+    ["Ventas Netas (Ingresos)", cascada.ingresos, false],
+    ["(-) Costo de Ventas", -cascada.costo_venta, false],
+    ["= Resultado Bruto", cascada.resultado_bruto, true],
+    ["(-) Gastos de Administración y Ventas (GAV)", -cascada.gav, false],
+    ["= EBITDA", cascada.ebitda, true],
+    ["(-) Depreciación y Amortización", -cascada.depreciacion_amortizacion, false],
+    ["= EBIT (Resultado Operacional)", cascada.ebit, true],
+    ["(-/+) Resultado Financiero", -cascada.resultado_financiero, false],
+    ["= EBT (Resultado antes de Impuesto)", cascada.ebt, true],
+    ["(-) Impuesto a la Renta", -cascada.impuesto_renta, false],
+  ];
+  if (cascada.sin_clasificar) {
+    filasCascada.push([
+      "(-) Gastos/Costos sin sub-clasificar (pendiente en el plan de cuentas)",
+      -cascada.sin_clasificar,
+      false,
+    ]);
+  }
+  filasCascada.push(["= Resultado Neto", cascada.resultado_neto, true]);
+
+  const tbodyCascada = document.querySelector("#tabla-cascada-resultados tbody");
+  tbodyCascada.innerHTML = "";
+  filasCascada.forEach(([etiqueta, monto, negrita]) => {
+    const tr = document.createElement("tr");
+    if (negrita) tr.style.fontWeight = "600";
+    tr.innerHTML = `<td>${etiqueta}</td><td style="text-align:right">${fmtMoney(monto)}</td>`;
+    tbodyCascada.appendChild(tr);
+  });
 
   // --- KPIs ---
   document.getElementById("kpi-razon-corriente").textContent = fmtRatio(kpis.liquidez.razon_corriente);
