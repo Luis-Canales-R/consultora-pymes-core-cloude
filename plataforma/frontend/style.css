@@ -84,6 +84,30 @@ h2 { margin-top: 0; }
   margin-bottom: 24px;
 }
 .panel h3 { margin-top: 0; }
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.panel-header h3 { margin: 0; }
+
+.btn-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--good);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn-export:hover { filter: brightness(1.08); }
 .panel h4 { margin: 20px 0 8px; font-size: 14px; color: var(--quiet); }
 
 .table-scroll { overflow-x: auto; }

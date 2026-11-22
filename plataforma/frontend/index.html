@@ -282,7 +282,10 @@
       </p>
 
       <div class="panel" id="panel-kpis">
-        <h3>KPIs Estándar (Liquidez, Apalancamiento, Rentabilidad)</h3>
+        <div class="panel-header">
+          <h3>KPIs Estándar (Liquidez, Apalancamiento, Rentabilidad)</h3>
+          <a class="btn-export" href="/api/informes/kpis/export" download>⬇ Descargar Excel</a>
+        </div>
         <p class="hint">
           Fórmulas estándar de finanzas corporativas, acumuladas a la fecha (mismo alcance que el Balance General).
           "N/D" significa que el ratio no está definido (ej. división por Patrimonio = 0).
@@ -338,7 +341,10 @@
       </div>
 
       <div class="panel" id="panel-comparacion-periodos">
-        <h3>Comparación entre Periodos</h3>
+        <div class="panel-header">
+          <h3>Comparación entre Periodos</h3>
+          <a class="btn-export" href="/api/informes/comparacion-periodos/export" download>⬇ Descargar Excel</a>
+        </div>
         <table class="data-table" id="tabla-comparacion-mensual">
           <thead>
             <tr>
@@ -369,7 +375,10 @@
       </div>
 
       <div class="panel" id="panel-balance-8-columnas">
-        <h3>Balance de 8 Columnas</h3>
+        <div class="panel-header">
+          <h3>Balance de 8 Columnas</h3>
+          <a class="btn-export" href="/api/informes/balance-8-columnas/export" download>⬇ Descargar Excel</a>
+        </div>
         <p class="hint">
           Hoja de trabajo tradicional, acumulada a la fecha (igual alcance que el Balance General).
           El Patrimonio se muestra en su propia columna en vez de fusionarlo con Pasivo.

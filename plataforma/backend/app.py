@@ -16,9 +16,10 @@ import sqlite3
 from datetime import date
 from uuid import uuid4
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
 import db
+import excel_export
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
@@ -917,11 +918,10 @@ def dashboard():
 # SQLite no modela.
 # ---------------------------------------------------------------------------
 
-@app.route("/api/informes/balance-8-columnas", methods=["GET"])
-def informe_balance_ocho_columnas():
-    if db.DB_ENGINE != "mssql":
-        return jsonify({"modo_demo": True, "cuentas": []})
-
+def _obtener_balance_ocho_columnas():
+    """Devuelve (cuentas, totales) desde vw_balance_ocho_columnas. Factorizado
+    para que lo use tanto el endpoint JSON como el de exportación a Excel,
+    sin duplicar la consulta ni la suma de totales."""
     conn = db.get_conn()
     cuentas = db.fetch_dicts(
         conn,
@@ -943,8 +943,32 @@ def informe_balance_ocho_columnas():
     for c in cuentas:
         for clave in totales:
             totales[clave] += float(c[clave] or 0)
+    return cuentas, totales
 
+
+@app.route("/api/informes/balance-8-columnas", methods=["GET"])
+def informe_balance_ocho_columnas():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True, "cuentas": []})
+
+    cuentas, totales = _obtener_balance_ocho_columnas()
     return jsonify({"modo_demo": False, "cuentas": cuentas, "totales": totales})
+
+
+@app.route("/api/informes/balance-8-columnas/export", methods=["GET"])
+def exportar_balance_ocho_columnas():
+    if db.DB_ENGINE != "mssql":
+        return error("La exportación a Excel requiere el motor contable real (DB_ENGINE=mssql).", 400)
+
+    cuentas, totales = _obtener_balance_ocho_columnas()
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_balance_ocho_columnas(wb, cuentas, totales)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("balance_8_columnas"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def _mes_anterior(periodo):
@@ -1049,11 +1073,9 @@ def calcular_comparacion_periodos(filas):
     return {"periodos": periodos, "ytd": ytd}
 
 
-@app.route("/api/informes/comparacion-periodos", methods=["GET"])
-def informe_comparacion_periodos():
-    if db.DB_ENGINE != "mssql":
-        return jsonify({"modo_demo": True, "periodos": [], "ytd": []})
-
+def _obtener_comparacion_periodos():
+    """Devuelve {'periodos':.., 'ytd':..} desde vw_estado_resultados. Factorizado
+    para que lo use tanto el endpoint JSON como el de exportación a Excel."""
     conn = db.get_conn()
     filas_er = db.fetch_dicts(
         conn,
@@ -1073,8 +1095,32 @@ def informe_comparacion_periodos():
     for fila in por_mes.values():
         fila["resultado"] = fila["ingresos"] - fila["costos_gastos"]
 
-    resultado = calcular_comparacion_periodos(list(por_mes.values()))
+    return calcular_comparacion_periodos(list(por_mes.values()))
+
+
+@app.route("/api/informes/comparacion-periodos", methods=["GET"])
+def informe_comparacion_periodos():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True, "periodos": [], "ytd": []})
+
+    resultado = _obtener_comparacion_periodos()
     return jsonify({"modo_demo": False, **resultado})
+
+
+@app.route("/api/informes/comparacion-periodos/export", methods=["GET"])
+def exportar_comparacion_periodos():
+    if db.DB_ENGINE != "mssql":
+        return error("La exportación a Excel requiere el motor contable real (DB_ENGINE=mssql).", 400)
+
+    resultado = _obtener_comparacion_periodos()
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hojas_comparacion_periodos(wb, resultado["periodos"], resultado["ytd"])
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("comparacion_periodos"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 
@@ -1160,11 +1206,10 @@ def calcular_kpis(cuentas_balance, totales_resultado):
     }
 
 
-@app.route("/api/informes/kpis", methods=["GET"])
-def informe_kpis():
-    if db.DB_ENGINE != "mssql":
-        return jsonify({"modo_demo": True})
-
+def _obtener_kpis():
+    """Devuelve el dict de KPIs (liquidez/apalancamiento/rentabilidad).
+    Factorizado para que lo use tanto el endpoint JSON como el de
+    exportación a Excel."""
     conn = db.get_conn()
     cuentas_balance = db.fetch_dicts(
         conn,
@@ -1186,8 +1231,32 @@ def informe_kpis():
 
     totales_resultado = {f["tipo_cuenta"]: float(f["total"] or 0) for f in filas_resultado}
 
-    kpis = calcular_kpis(cuentas_balance, totales_resultado)
+    return calcular_kpis(cuentas_balance, totales_resultado)
+
+
+@app.route("/api/informes/kpis", methods=["GET"])
+def informe_kpis():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True})
+
+    kpis = _obtener_kpis()
     return jsonify({"modo_demo": False, **kpis})
+
+
+@app.route("/api/informes/kpis/export", methods=["GET"])
+def exportar_kpis():
+    if db.DB_ENGINE != "mssql":
+        return error("La exportación a Excel requiere el motor contable real (DB_ENGINE=mssql).", 400)
+
+    kpis = _obtener_kpis()
+    wb = excel_export.libro_nuevo()
+    excel_export.agregar_hoja_kpis(wb, kpis)
+    return send_file(
+        excel_export.a_bytes(wb),
+        as_attachment=True,
+        download_name=excel_export.nombre_archivo("kpis"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 if __name__ == "__main__":

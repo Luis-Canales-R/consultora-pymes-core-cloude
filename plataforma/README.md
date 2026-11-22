@@ -265,8 +265,50 @@ guardarse con BOM UTF-8 para que SSMS lo abra con la codificación
 correcta — ver Hallazgo #8 en el plan del proyecto para el bug que esto
 evita (mojibake en `cat_plan_cuentas.nombre_cuenta`, ya corregido).
 
+### Exportación a Excel (Fase 1)
+
+Cada uno de los tres informes de arriba tiene un botón "⬇ Descargar
+Excel" que llama a su propio endpoint de exportación:
+
+- `GET /api/informes/kpis/export`
+- `GET /api/informes/balance-8-columnas/export`
+- `GET /api/informes/comparacion-periodos/export`
+
+Los tres devuelven un `.xlsx` (mimetype
+`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) listo
+para descargar, generado con `openpyxl` a través de un módulo nuevo,
+`plataforma/backend/excel_export.py`, que centraliza el estilo
+(encabezados, formato de moneda/razón/porcentaje, fila de totales en
+negrita, ancho de columna) para que los endpoints de exportación
+siguientes (catálogos, luego transaccionales — ver el plan del proyecto)
+lo reutilicen en vez de reinventarlo. En modo SQLite (demo) devuelven
+`400` con un mensaje claro en vez de datos vacíos, porque no tiene
+sentido exportar un informe que no existe en ese modo.
+
+Cada endpoint de exportación reutiliza exactamente el mismo cálculo que
+su endpoint JSON ya validado (`_obtener_kpis`, `_obtener_balance_ocho_
+columnas`, `_obtener_comparacion_periodos` — se factorizaron para esto),
+así que el número en el Excel no puede divergir del número que se ve en
+pantalla. Probado con datos sintéticos que imitan la forma real de
+`vw_balance_ocho_columnas`/`vw_balance_general`/`vw_estado_resultados`
+(incluyendo el caso límite Patrimonio = 0 → celda "N/D"), usando el test
+client de Flask + `openpyxl.load_workbook` para confirmar que el archivo
+generado es un `.xlsx` válido con las hojas y los números esperados — no
+validado todavía visualmente por el usuario abriendo el archivo
+descargado.
+
+Esta es la Fase 1 de la meta más amplia "Exportación a Excel y Carga/
+Exportación Masiva" (ver plan del proyecto): exportación masiva de
+catálogos, exportación masiva de módulos transaccionales, carga masiva
+de catálogos y carga masiva de transaccionales siguen, en ese orden.
+
 ### Pendiente
 
+- Exportación masiva de catálogos (Terceros, Productos/Servicios,
+  Centros de Costo) y de módulos transaccionales (Ventas, Compras,
+  Caja), y carga masiva de todos los módulos (plantilla descargable,
+  validación fila por fila, reporte de errores) — ver el documento de
+  plan del proyecto para el orden de fases y los riesgos de cada una.
 - Flujo de Caja Proyectado (control de liquidez): no implementado todavía
   — ver el documento de plan del proyecto para el alcance y los pasos
   propuestos (requiere resolver la trazabilidad Caja↔documento y agregar
