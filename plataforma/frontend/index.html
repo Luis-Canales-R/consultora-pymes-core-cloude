@@ -238,8 +238,12 @@
           <button type="submit">Agregar tercero</button>
           <span class="form-msg" id="msg-tercero"></span>
         </form>
+        <div class="acciones-masivas" data-modulo="terceros">
+          <button type="button" class="btn-link btn-link-danger" data-accion="desactivar-seleccionados" disabled>Desactivar seleccionados</button>
+          <span class="contador-seleccion"></span>
+        </div>
         <table class="data-table" id="tabla-terceros">
-          <thead><tr><th>Código</th><th>Razón social</th><th>RUT</th><th>Cliente</th><th>Proveedor</th><th>Acciones</th></tr></thead>
+          <thead><tr><th><input type="checkbox" data-accion="seleccionar-todos"></th><th>Código</th><th>Razón social</th><th>RUT</th><th>Cliente</th><th>Proveedor</th><th>Acciones</th></tr></thead>
           <tbody></tbody>
         </table>
         <div class="carga-masiva" id="carga-masiva-terceros" data-modulo="terceros">
@@ -278,8 +282,12 @@
           <span class="form-msg" id="msg-producto"></span>
         </form>
         <p class="hint">Desmarcar "Afecto a IVA" para productos/servicios exentos (ej. algunos servicios de salud). La factura de exportación y otros tipos de documento aún no están modelados.</p>
+        <div class="acciones-masivas" data-modulo="productos">
+          <button type="button" class="btn-link btn-link-danger" data-accion="desactivar-seleccionados" disabled>Desactivar seleccionados</button>
+          <span class="contador-seleccion"></span>
+        </div>
         <table class="data-table" id="tabla-productos">
-          <thead><tr><th>SKU</th><th>Nombre</th><th>Precio</th><th>Modo obtención</th><th>IVA</th><th>Acciones</th></tr></thead>
+          <thead><tr><th><input type="checkbox" data-accion="seleccionar-todos"></th><th>SKU</th><th>Nombre</th><th>Precio</th><th>Modo obtención</th><th>IVA</th><th>Acciones</th></tr></thead>
           <tbody></tbody>
         </table>
         <div class="carga-masiva" id="carga-masiva-productos" data-modulo="productos">
@@ -304,8 +312,12 @@
           <button type="submit">Agregar centro de costo</button>
           <span class="form-msg" id="msg-centro"></span>
         </form>
+        <div class="acciones-masivas" data-modulo="centros_costo">
+          <button type="button" class="btn-link btn-link-danger" data-accion="desactivar-seleccionados" disabled>Desactivar seleccionados</button>
+          <span class="contador-seleccion"></span>
+        </div>
         <table class="data-table" id="tabla-centros">
-          <thead><tr><th>Nombre</th><th>Acciones</th></tr></thead>
+          <thead><tr><th><input type="checkbox" data-accion="seleccionar-todos"></th><th>Nombre</th><th>Acciones</th></tr></thead>
           <tbody></tbody>
         </table>
         <div class="carga-masiva" id="carga-masiva-centros_costo" data-modulo="centros_costo">

@@ -506,6 +506,70 @@ function initFormCaja() {
 // editar sin tener que volver a pedir el registro al backend).
 const _catalogos = { terceros: [], productos: [], centros: [] };
 
+// Funciones de reseteo visual de la selección masiva de cada tabla (una por
+// catálogo); loadCatalogos() las llama después de reconstruir las filas,
+// porque reconstruir el <tbody> pierde el estado de los checkboxes.
+const _resetSeleccionesMasivas = [];
+
+// Checkboxes de selección + "Desactivar seleccionados" en la tabla de un
+// catálogo. tablaSelector: selector CSS de la <table>. endpointBase: ruta
+// de la API del catálogo (ej. "/terceros") -- se le agrega
+// "/desactivar-masivo". msgElId: id del <span class="form-msg"> del
+// catálogo, para mostrar un eventual error.
+function initAccionesMasivas(modulo, tablaSelector, endpointBase, msgElId) {
+  const barra = document.querySelector(`.acciones-masivas[data-modulo="${modulo}"]`);
+  const tabla = document.querySelector(tablaSelector);
+  if (!barra || !tabla) return;
+  const btnTodos = tabla.querySelector('thead input[data-accion="seleccionar-todos"]');
+  const btnDesactivar = barra.querySelector('button[data-accion="desactivar-seleccionados"]');
+  const contador = barra.querySelector(".contador-seleccion");
+
+  function filasCheckbox() {
+    return Array.from(tabla.querySelectorAll('tbody input[data-accion="seleccionar-fila"]'));
+  }
+
+  function actualizar() {
+    const todas = filasCheckbox();
+    const seleccionadas = todas.filter((c) => c.checked);
+    contador.textContent = seleccionadas.length ? `${seleccionadas.length} seleccionado(s)` : "";
+    btnDesactivar.disabled = seleccionadas.length === 0;
+    if (btnTodos) {
+      btnTodos.checked = todas.length > 0 && seleccionadas.length === todas.length;
+      btnTodos.indeterminate = seleccionadas.length > 0 && seleccionadas.length < todas.length;
+    }
+  }
+
+  tabla.addEventListener("change", (e) => {
+    if (e.target.matches('input[data-accion="seleccionar-fila"]')) actualizar();
+  });
+
+  if (btnTodos) {
+    btnTodos.addEventListener("change", () => {
+      filasCheckbox().forEach((c) => (c.checked = btnTodos.checked));
+      actualizar();
+    });
+  }
+
+  btnDesactivar.addEventListener("click", async () => {
+    const ids = filasCheckbox().filter((c) => c.checked).map((c) => Number(c.dataset.id));
+    if (!ids.length) return;
+    const plural = ids.length > 1 ? "s" : "";
+    if (!confirm(
+      `¿Desactivar ${ids.length} registro${plural} seleccionado${plural}? Dejan de aparecer en ` +
+      `listados y selectores, pero no se borran ni afectan a movimientos ya registrados.`
+    )) return;
+    try {
+      await apiPost(`${endpointBase}/desactivar-masivo`, { ids });
+      loadCatalogos();
+      refreshCatalogCaches();
+    } catch (err) {
+      showMsg(msgElId, err.message, false);
+    }
+  });
+
+  _resetSeleccionesMasivas.push(actualizar);
+}
+
 async function loadCatalogos() {
   const [terceros, productos, centros] = await Promise.all([
     apiGet("/terceros"),
@@ -521,6 +585,7 @@ async function loadCatalogos() {
   terceros.forEach((t) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td><input type="checkbox" data-accion="seleccionar-fila" data-id="${t.id_tercero}"></td>
       <td>${t.codigo_tercero}</td>
       <td>${t.razon_social}</td>
       <td>${t.rut_dni}</td>
@@ -538,6 +603,7 @@ async function loadCatalogos() {
   productos.forEach((p) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td><input type="checkbox" data-accion="seleccionar-fila" data-id="${p.id_item}"></td>
       <td>${p.sku_codigo}</td>
       <td>${p.nombre}</td>
       <td>${fmtMoney(p.precio_venta_base)}</td>
@@ -555,6 +621,7 @@ async function loadCatalogos() {
   centros.forEach((c) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td><input type="checkbox" data-accion="seleccionar-fila" data-id="${c.id_centro_costo}"></td>
       <td>${c.nombre}</td>
       <td class="acciones">
         <button type="button" class="btn-link" data-accion="editar" data-id="${c.id_centro_costo}">Editar</button>
@@ -562,6 +629,10 @@ async function loadCatalogos() {
       </td>`;
     tCentros.appendChild(tr);
   });
+
+  // Reconstruir las filas (arriba) pierde el estado de los checkboxes, así
+  // que la selección y el botón "Desactivar seleccionados" se resetean.
+  _resetSeleccionesMasivas.forEach((fn) => fn());
 }
 
 // Pone un formulario de alta en "modo edición": cambia el texto del botón,
@@ -761,11 +832,14 @@ function renderReporteCarga(contenedor, reporte) {
   const filas = reporte.errores
     .map((e) => `<tr><td>${e.fila}</td><td>${e.motivo}</td></tr>`)
     .join("");
+  // "bloqueada": todo o nada -- si hubo cualquier error, no se cargó NADA
+  // (ver carga_masiva.procesar_carga). El mensaje debe dejarlo clarísimo
+  // para que el usuario no tenga que adivinar qué quedó cargado.
+  const mensaje = reporte.bloqueada
+    ? `Carga bloqueada: no se cargó ningún dato. Corrige ${reporte.errores.length === 1 ? "la fila indicada" : "las filas indicadas"} abajo y vuelve a subir el archivo.`
+    : `${reporte.cargados} de ${reporte.total_filas} fila(s) cargadas correctamente.`;
   contenedor.innerHTML = `
-    <p class="${reporte.rechazados === 0 ? "ok" : "err"}">
-      ${reporte.cargados} de ${reporte.total_filas} fila(s) cargadas correctamente
-      ${reporte.rechazados ? `, ${reporte.rechazados} rechazada(s):` : "."}
-    </p>
+    <p class="${reporte.bloqueada ? "err" : "ok"}">${mensaje}</p>
     ${filas ? `<table class="data-table"><thead><tr><th>Fila</th><th>Motivo</th></tr></thead><tbody>${filas}</tbody></table>` : ""}
   `;
 }
@@ -928,6 +1002,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initFormTercero();
   initFormProducto();
   initFormCentro();
+  initAccionesMasivas("terceros", "#tabla-terceros", "/terceros", "msg-tercero");
+  initAccionesMasivas("productos", "#tabla-productos", "/productos", "msg-producto");
+  initAccionesMasivas("centros_costo", "#tabla-centros", "/centros_costo", "msg-centro");
   const onCargaMasivaOk = () => {
     loadCatalogos();
     refreshCatalogCaches();

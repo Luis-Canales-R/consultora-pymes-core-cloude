@@ -62,6 +62,28 @@ def require_fields(payload, fields):
     return None
 
 
+def _desactivar_masivo(tabla, col_id, col_estado):
+    """Endpoint genérico de desactivación masiva (soft-delete, igual que la
+    desactivación individual -- nunca DELETE físico, ver Hallazgo #13 del
+    plan): recibe {"ids": [...]} y marca esos registros como inactivos en
+    UNA sola transacción (si algo falla, no se desactiva ninguno)."""
+    payload = request.get_json(force=True) or {}
+    ids = payload.get("ids") or []
+    if not ids:
+        return error("Debes indicar al menos un id para desactivar")
+    conn = db.get_conn()
+    try:
+        placeholders = ",".join(["?"] * len(ids))
+        conn.execute(f"UPDATE {tabla} SET {col_estado} = 0 WHERE {col_id} IN ({placeholders})", tuple(ids))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        conn.close()
+        return error(f"No se pudo desactivar la selección: {exc}")
+    conn.close()
+    return jsonify({"ok": True, "desactivados": len(ids)})
+
+
 # ---------------------------------------------------------------------------
 # Catálogos: terceros, productos/servicios, centros de costo
 # ---------------------------------------------------------------------------
@@ -233,14 +255,90 @@ _EJEMPLO_TERCEROS = {
 }
 
 
+_INSTRUCTIVO_TERCEROS = {
+    "titulo": "Instructivo de carga masiva — Terceros (clientes / proveedores)",
+    "secciones": [
+        ("Antes de empezar", [
+            "Esta plantilla es solo para CREAR terceros nuevos. No sirve para actualizar uno "
+            "ya cargado: si subes de nuevo un RUT/DNI o un Código que ya existe, la carga "
+            "completa se rechaza (ver más abajo). Para corregir un dato ya cargado, usa el "
+            "botón \"Editar\" en la tabla de Terceros.",
+            "Borra la fila de ejemplo (\"BORRAR ESTA FILA - EJEMPLO\") antes de cargar, o "
+            "agrega tus filas debajo de ella y bórrala al final.",
+            "La carga es TODO O NADA: si una sola fila del archivo tiene un error, NO se "
+            "carga ninguna. El reporte te muestra todas las filas con error de una sola vez, "
+            "para que corrijas el archivo completo y vuelvas a intentar.",
+        ]),
+        ("Requisitos por columna", [
+            "Código: opcional. Si lo dejas vacío, se genera automático (T-0001, T-0002, ...). "
+            "Si lo informas, debe ser único (no puede repetirse con otro tercero ya cargado "
+            "ni con otra fila de este mismo archivo).",
+            "Razón Social: obligatorio.",
+            "RUT/DNI: obligatorio, y debe ser único (no puede repetirse con otro tercero ya "
+            "cargado ni con otra fila de este mismo archivo).",
+            "Email: opcional.",
+            "Cliente / Proveedor: \"Sí\" o \"No\" (vacío se interpreta como \"No\"). Un tercero "
+            "puede ser ambos a la vez.",
+        ]),
+        ("Si marcas Cliente o Proveedor", [
+            "La Razón Social de un tercero marcado como Cliente o Proveedor también debe ser "
+            "única entre los terceros que operan en Ventas/Compras (es el nombre con el que el "
+            "sistema lo reconoce al registrar una venta o compra). Si ya existe un cliente o "
+            "proveedor con esa misma Razón Social, esa fila se rechaza.",
+        ]),
+    ],
+}
+
+
 @app.route("/api/terceros/plantilla-carga", methods=["GET"])
 def plantilla_terceros():
-    contenido = carga_masiva.generar_plantilla("Terceros", _COLUMNAS_PLANTILLA_TERCEROS, _EJEMPLO_TERCEROS)
+    contenido = carga_masiva.generar_plantilla(
+        "Terceros", _COLUMNAS_PLANTILLA_TERCEROS, _EJEMPLO_TERCEROS, _INSTRUCTIVO_TERCEROS
+    )
     return send_file(
         contenido, as_attachment=True,
         download_name="plantilla_terceros.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+def _validar_fila_tercero(conn, datos, vistos):
+    """Validaciones de negocio para una fila de la carga masiva de
+    Terceros, llamadas ANTES de cargar nada (ver carga_masiva.procesar_carga,
+    modelo "todo o nada"). `vistos` detecta duplicados DENTRO del mismo
+    archivo; las consultas detectan duplicados contra lo YA cargado en la
+    base (sin filtrar por estado_activo: el UNIQUE de la base tampoco
+    distingue activo/inactivo, así que un tercero desactivado igual bloquea
+    reusar su RUT/Código)."""
+    rut = datos["rut_dni"]
+    ruts_vistos = vistos.setdefault("ruts", set())
+    if rut in ruts_vistos:
+        return f"El RUT/DNI '{rut}' está repetido en más de una fila de este archivo"
+    ruts_vistos.add(rut)
+    if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_terceros WHERE rut_dni = ?", (rut,)):
+        return f"Ya existe un tercero cargado con el RUT/DNI '{rut}'"
+
+    codigo = datos.get("codigo_tercero")
+    if codigo:
+        codigos_vistos = vistos.setdefault("codigos", set())
+        if codigo in codigos_vistos:
+            return f"El Código '{codigo}' está repetido en más de una fila de este archivo"
+        codigos_vistos.add(codigo)
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_terceros WHERE codigo_tercero = ?", (codigo,)):
+            return f"Ya existe un tercero cargado con el Código '{codigo}'"
+
+    if db.DB_ENGINE == "mssql" and (datos.get("es_cliente") or datos.get("es_proveedor")):
+        nombre = datos["razon_social"]
+        nombres_vistos = vistos.setdefault("razones_sociales_cli_prov", set())
+        if nombre in nombres_vistos:
+            return (
+                f"La Razón Social '{nombre}' está repetida en más de una fila marcada como "
+                f"Cliente/Proveedor (cada cliente/proveedor necesita un nombre único)"
+            )
+        nombres_vistos.add(nombre)
+        if db.fetch_one_dict(conn, "SELECT 1 FROM map_clientes WHERE nombre_informal_excel = ?", (nombre,)):
+            return f"Ya existe un cliente/proveedor cargado con la Razón Social '{nombre}'"
+    return None
 
 
 @app.route("/api/terceros/carga-masiva", methods=["POST"])
@@ -263,11 +361,16 @@ def carga_masiva_terceros():
     try:
         reporte = carga_masiva.procesar_carga(
             archivo, _COLUMNAS_PLANTILLA_TERCEROS, ["razon_social", "rut_dni"],
-            fila_a_datos, _registrar_tercero, conn,
+            fila_a_datos, _registrar_tercero, conn, validar_fn=_validar_fila_tercero,
         )
     finally:
         conn.close()
     return jsonify(reporte)
+
+
+@app.route("/api/terceros/desactivar-masivo", methods=["POST"])
+def desactivar_terceros_masivo():
+    return _desactivar_masivo("tbl_terceros", "id_tercero", "estado_activo")
 
 
 def _homologar_nombre(conn, tabla_map, col_nombre, col_id_oficial, id_oficial, nombre_nuevo, activar_si_falta):
@@ -501,14 +604,73 @@ _EJEMPLO_PRODUCTOS = {
 }
 
 
+_INSTRUCTIVO_PRODUCTOS = {
+    "titulo": "Instructivo de carga masiva — Productos / Servicios",
+    "secciones": [
+        ("Antes de empezar", [
+            "Esta plantilla es solo para CREAR productos/servicios nuevos. No sirve para "
+            "actualizar uno ya cargado: si subes de nuevo un SKU o un Nombre que ya existe, la "
+            "carga completa se rechaza (ver más abajo). Para corregir un dato ya cargado, usa "
+            "el botón \"Editar\" en la tabla de Productos / Servicios.",
+            "Borra la fila de ejemplo (\"BORRAR ESTA FILA - EJEMPLO\") antes de cargar, o "
+            "agrega tus filas debajo de ella y bórrala al final.",
+            "La carga es TODO O NADA: si una sola fila del archivo tiene un error, NO se "
+            "carga ninguna. El reporte te muestra todas las filas con error de una sola vez, "
+            "para que corrijas el archivo completo y vuelvas a intentar.",
+        ]),
+        ("Requisitos por columna", [
+            "SKU: opcional. Si lo dejas vacío, se genera automático (SKU-0001, SKU-0002, ...). "
+            "Si lo informas, debe ser único (no puede repetirse con otro producto ya cargado "
+            "ni con otra fila de este mismo archivo).",
+            "Nombre: obligatorio, y debe ser único entre todos los productos/servicios (es el "
+            "nombre con el que el sistema lo reconoce al registrar una venta o compra).",
+            "Precio Venta Base: obligatorio, numérico (ej. 15000 o 15.000).",
+            "IVA: escriba \"Exento\" para que quede exento de IVA; cualquier otro valor (o "
+            "vacío) queda Afecto.",
+            "Modo Obtención: opcional. Solo se acepta COMPRADO_REVENTA, FABRICADO, SERVICIO, o "
+            "vacío (sin clasificar) -- cualquier otro texto rechaza la fila.",
+        ]),
+    ],
+}
+
+
 @app.route("/api/productos/plantilla-carga", methods=["GET"])
 def plantilla_productos():
-    contenido = carga_masiva.generar_plantilla("Productos", _COLUMNAS_PLANTILLA_PRODUCTOS, _EJEMPLO_PRODUCTOS)
+    contenido = carga_masiva.generar_plantilla(
+        "Productos", _COLUMNAS_PLANTILLA_PRODUCTOS, _EJEMPLO_PRODUCTOS, _INSTRUCTIVO_PRODUCTOS
+    )
     return send_file(
         contenido, as_attachment=True,
         download_name="plantilla_productos.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+def _validar_fila_producto(conn, datos, vistos):
+    """Validaciones de negocio para una fila de la carga masiva de
+    Productos, llamadas ANTES de cargar nada -- ver la nota equivalente en
+    _validar_fila_tercero."""
+    if datos.get("_error_modo"):
+        return datos["_error_modo"]
+
+    sku = datos.get("sku_codigo")
+    if sku:
+        skus_vistos = vistos.setdefault("skus", set())
+        if sku in skus_vistos:
+            return f"El SKU '{sku}' está repetido en más de una fila de este archivo"
+        skus_vistos.add(sku)
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_productos_servicios WHERE sku_codigo = ?", (sku,)):
+            return f"Ya existe un producto/servicio cargado con el SKU '{sku}'"
+
+    if db.DB_ENGINE == "mssql":
+        nombre = datos["nombre"]
+        nombres_vistos = vistos.setdefault("nombres", set())
+        if nombre in nombres_vistos:
+            return f"El Nombre '{nombre}' está repetido en más de una fila de este archivo"
+        nombres_vistos.add(nombre)
+        if db.fetch_one_dict(conn, "SELECT 1 FROM map_productos WHERE descripcion_libre_excel = ?", (nombre,)):
+            return f"Ya existe un producto/servicio cargado con el Nombre '{nombre}'"
+    return None
 
 
 @app.route("/api/productos/carga-masiva", methods=["POST"])
@@ -539,21 +701,18 @@ def carga_masiva_productos():
 
     conn = db.get_conn()
     try:
-        # procesar_carga no conoce la regla de modo_obtencion inválido (es
-        # específica de Productos), así que la capturamos en fila_a_datos
-        # con la clave _error_modo y la convertimos en rechazo explícito.
-        def registrar_con_validacion(conn, datos):
-            if datos.get("_error_modo"):
-                raise ValueError(datos["_error_modo"])
-            return _registrar_producto(conn, datos)
-
         reporte = carga_masiva.procesar_carga(
             archivo, _COLUMNAS_PLANTILLA_PRODUCTOS, ["nombre", "precio_venta_base"],
-            fila_a_datos, registrar_con_validacion, conn,
+            fila_a_datos, _registrar_producto, conn, validar_fn=_validar_fila_producto,
         )
     finally:
         conn.close()
     return jsonify(reporte)
+
+
+@app.route("/api/productos/desactivar-masivo", methods=["POST"])
+def desactivar_productos_masivo():
+    return _desactivar_masivo("tbl_productos_servicios", "id_item", "estado_activo")
 
 
 @app.route("/api/productos/<int:id_item>", methods=["PUT"])
@@ -696,16 +855,64 @@ _EJEMPLO_CENTROS_COSTO = {
 }
 
 
+_INSTRUCTIVO_CENTROS_COSTO = {
+    "titulo": "Instructivo de carga masiva — Centros de Costo",
+    "secciones": [
+        ("Antes de empezar", [
+            "Esta plantilla es solo para CREAR centros de costo nuevos. No sirve para "
+            "actualizar uno ya cargado: si subes de nuevo un Código o un Nombre que ya existe, "
+            "la carga completa se rechaza (ver más abajo). Para corregir un dato ya cargado, "
+            "usa el botón \"Editar\" en la tabla de Centros de Costo.",
+            "Borra la fila de ejemplo (\"BORRAR ESTA FILA - EJEMPLO\") antes de cargar, o "
+            "agrega tus filas debajo de ella y bórrala al final.",
+            "La carga es TODO O NADA: si una sola fila del archivo tiene un error, NO se "
+            "carga ninguna. El reporte te muestra todas las filas con error de una sola vez, "
+            "para que corrijas el archivo completo y vuelvas a intentar.",
+        ]),
+        ("Requisitos por columna", [
+            "Código: solo aplica en modo SQL Server; opcional (se autogenera si se deja "
+            "vacío). Si lo informas, debe ser único.",
+            "Nombre: obligatorio, y debe ser único entre todos los centros de costo.",
+        ]),
+    ],
+}
+
+
 @app.route("/api/centros_costo/plantilla-carga", methods=["GET"])
 def plantilla_centros_costo():
     contenido = carga_masiva.generar_plantilla(
-        "Centros de Costo", _COLUMNAS_PLANTILLA_CENTROS_COSTO, _EJEMPLO_CENTROS_COSTO
+        "Centros de Costo", _COLUMNAS_PLANTILLA_CENTROS_COSTO, _EJEMPLO_CENTROS_COSTO,
+        _INSTRUCTIVO_CENTROS_COSTO,
     )
     return send_file(
         contenido, as_attachment=True,
         download_name="plantilla_centros_costo.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+def _validar_fila_centro_costo(conn, datos, vistos):
+    """Validaciones de negocio para una fila de la carga masiva de Centros
+    de Costo, llamadas ANTES de cargar nada -- ver la nota equivalente en
+    _validar_fila_tercero."""
+    nombre = datos["nombre"]
+    nombres_vistos = vistos.setdefault("nombres", set())
+    if nombre in nombres_vistos:
+        return f"El Nombre '{nombre}' está repetido en más de una fila de este archivo"
+    nombres_vistos.add(nombre)
+    col_nombre = "nombre_cc" if db.DB_ENGINE == "mssql" else "nombre"
+    if db.fetch_one_dict(conn, f"SELECT 1 FROM tbl_centros_costo WHERE {col_nombre} = ?", (nombre,)):
+        return f"Ya existe un centro de costo cargado con el Nombre '{nombre}'"
+
+    codigo = datos.get("codigo_cc")
+    if codigo and db.DB_ENGINE == "mssql":
+        codigos_vistos = vistos.setdefault("codigos", set())
+        if codigo in codigos_vistos:
+            return f"El Código '{codigo}' está repetido en más de una fila de este archivo"
+        codigos_vistos.add(codigo)
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_centros_costo WHERE codigo_cc = ?", (codigo,)):
+            return f"Ya existe un centro de costo cargado con el Código '{codigo}'"
+    return None
 
 
 @app.route("/api/centros_costo/carga-masiva", methods=["POST"])
@@ -724,11 +931,17 @@ def carga_masiva_centros_costo():
     try:
         reporte = carga_masiva.procesar_carga(
             archivo, _COLUMNAS_PLANTILLA_CENTROS_COSTO, ["nombre"],
-            fila_a_datos, _registrar_centro_costo, conn,
+            fila_a_datos, _registrar_centro_costo, conn, validar_fn=_validar_fila_centro_costo,
         )
     finally:
         conn.close()
     return jsonify(reporte)
+
+
+@app.route("/api/centros_costo/desactivar-masivo", methods=["POST"])
+def desactivar_centros_costo_masivo():
+    col_estado = "es_activo" if db.DB_ENGINE == "mssql" else "estado_activo"
+    return _desactivar_masivo("tbl_centros_costo", "id_centro_costo", col_estado)
 
 
 @app.route("/api/centros_costo/<int:id_centro_costo>", methods=["PUT"])

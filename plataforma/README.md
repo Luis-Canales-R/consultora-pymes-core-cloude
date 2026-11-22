@@ -379,34 +379,76 @@ export/import del plan): la plantilla usa los mismos encabezados que la
 exportación a Excel de ese catálogo, con una fila de ejemplo que hay que
 borrar antes de cargar los datos reales.
 
-**Procesamiento fila por fila, sin perder el lote por una fila mala**
-(acordado explícitamente con el usuario): cada fila del Excel se valida
-y se inserta de forma independiente (commit por fila). Si una fila falla
-(campo requerido faltante, RUT/nombre duplicado, número inválido, `Modo
-Obtención` fuera de `COMPRADO_REVENTA`/`FABRICADO`/`SERVICIO`/vacío), se
-rechaza con un motivo claro y las demás filas del mismo archivo se
-cargan igual. La respuesta es un reporte JSON (`total_filas`, `cargados`,
-`rechazados`, `errores: [{fila, motivo}]`) que el frontend muestra como
-una tabla debajo del botón de carga.
+**La plantilla trae su propio instructivo** (agregado 2026-11-22, a
+pedido explícito del usuario): la primera hoja del archivo (antes de la
+hoja de datos) se llama "Instructivo" y lista, en español llano, qué
+columnas son obligatorias, cuáles deben ser únicas, y cualquier regla
+específica del catálogo (ej. los valores válidos de `Modo Obtención` en
+Productos) — así el usuario no tiene que salir a preguntar o adivinar por
+qué una fila fue rechazada.
+
+**Validación "todo o nada" (rediseñado 2026-11-22, a pedido explícito del
+usuario)**: antes de cargar nada, se validan TODAS las filas del archivo —
+campos requeridos, reglas propias del catálogo (ej. `Modo Obtención`
+fuera de `COMPRADO_REVENTA`/`FABRICADO`/`SERVICIO`/vacío) y duplicados,
+tanto contra lo ya cargado en la base como entre filas del mismo archivo
+(ej. dos filas con el mismo RUT). **Si una sola fila falla, no se carga
+absolutamente nada** — el reporte devuelve de una vez todas las filas con
+error (`bloqueada: true`), para que el usuario corrija el archivo completo
+y reintente, sin tener que salir a revisar manualmente qué quedó cargado y
+qué no. Si todas las filas pasan la validación, se cargan todas dentro de
+una única transacción. La respuesta es un reporte JSON (`total_filas`,
+`cargados`, `rechazados`, `errores: [{fila, motivo}]`, `bloqueada`) que el
+frontend muestra como un mensaje + una tabla debajo del botón de carga.
+
+(Versión anterior, implementada más temprano el mismo día: cada fila se
+procesaba y confirmaba de forma independiente, así que una fila mala no
+le quitaba la carga a las demás. Se reemplazó por el modelo de arriba
+porque el usuario prefiere bloquear el archivo completo antes que tener
+una carga parcial ambigua.)
 
 Arquitectura: `plataforma/backend/carga_masiva.py` (lectura tolerante de
-`.xlsx` por nombre de encabezado, generación de plantilla reutilizando el
-estilo de `excel_export.py`, motor genérico de carga fila-por-fila). La
-lógica de inserción de cada catálogo se extrajo a `_registrar_tercero` /
+`.xlsx` por nombre de encabezado, generación de plantilla con su hoja de
+instructivo reutilizando el estilo de `excel_export.py`, motor genérico de
+carga de dos fases: validar todo, luego cargar todo). La lógica de
+inserción de cada catálogo se extrajo a `_registrar_tercero` /
 `_registrar_producto` / `_registrar_centro_costo` en `app.py`, reutilizada
 tanto por el alta individual (formulario) como por la carga masiva, para
 que ambos caminos no puedan divergir — en particular, para que la carga
 masiva de Terceros también genere las homologaciones de `map_clientes`
 (ver Hallazgo #5 del plan: un importador que no genera esas
-homologaciones reproduce en masa el problema de "terceros huérfanos").
+homologaciones reproduce en masa el problema de "terceros huérfanos"). Las
+reglas de validación de cada catálogo viven en `_validar_fila_tercero` /
+`_validar_fila_producto` / `_validar_fila_centro_costo`, que se ejecutan
+en la fase de validación (sin escribir en la base) antes de decidir si se
+carga algo.
 
-Probado contra SQLite real (subir un archivo con filas válidas e
-inválidas, confirmar el reporte y los registros creados vía la API) y
-con una conexión `mssql` simulada (tablas equivalentes a las reales, vía
-el test client de Flask) que confirma que la homologación duplicada y el
-`Modo Obtención` inválido se rechazan fila por fila sin perder las filas
-válidas del mismo archivo — no validado todavía por el usuario contra su
-SQL Server real.
+Probado contra SQLite real (archivo 100% válido se carga completo; un
+archivo con una fila inválida entre filas válidas no carga nada; re-subir
+el mismo archivo con RUT/SKU/nombre ya cargado bloquea todo; dos filas con
+el mismo RUT dentro de un mismo archivo bloquean todo) y con una conexión
+`mssql` simulada (tablas equivalentes a las reales, vía el test client de
+Flask) que confirma además que una Razón Social/Nombre duplicada contra
+`map_clientes`/`map_productos` también bloquea la carga completa — no
+validado todavía por el usuario contra su SQL Server real.
+
+### Selección y desactivación masiva
+
+Cada tabla de Catálogos tiene una columna de casilla de selección (una
+por fila + "seleccionar todos" en el encabezado) y, arriba de la tabla,
+un botón "Desactivar seleccionados" (agregado 2026-11-22, a pedido
+explícito del usuario, para no tener que desactivar los registros uno
+por uno después de una carga masiva con errores, por ejemplo).
+
+- `POST /api/terceros/desactivar-masivo`, `/productos/desactivar-masivo`,
+  `/centros_costo/desactivar-masivo`: reciben `{"ids": [...]}` y
+  desactivan esos registros en una única transacción (mismo soft-delete
+  que el botón "Desactivar" individual — ver la sección de abajo; si algo
+  falla, no se desactiva ninguno de los seleccionados).
+
+Probado contra SQLite real y con la conexión `mssql` simulada (incluyendo
+el caso de Centros de Costo, que usa la columna `es_activo` en vez de
+`estado_activo`).
 
 ### Editar y desactivar catálogos
 

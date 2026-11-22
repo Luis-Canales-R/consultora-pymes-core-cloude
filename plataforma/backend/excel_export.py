@@ -205,6 +205,41 @@ def agregar_hoja_balance_ocho_columnas(wb, cuentas, totales):
     agregar_hoja_tabla(wb, "Balance 8 Columnas", columnas, cuentas, totales=fila_totales)
 
 
+def agregar_hoja_instructivo(wb, titulo, secciones):
+    """Hoja de instrucciones en texto plano, pensada para ser la PRIMERA
+    hoja de una plantilla de carga masiva (ver carga_masiva.generar_plantilla)
+    -- así es lo primero que el usuario ve al abrir el archivo, antes de la
+    hoja con los datos.
+
+    secciones: lista de (encabezado, contenido). `contenido` puede ser un
+    string (un párrafo) o una lista de strings (se muestran como viñetas,
+    una por línea) -- esto último para listar los requisitos campo por
+    campo sin tener que escribir un párrafo largo.
+    """
+    ws = wb.create_sheet(title="Instructivo", index=0)
+    ws.column_dimensions["A"].width = 100
+
+    fila = 1
+    celda = ws.cell(row=fila, column=1, value=titulo)
+    celda.font = Font(bold=True, size=14, color="1F4E78")
+    fila += 2
+
+    for encabezado, contenido in secciones:
+        celda = ws.cell(row=fila, column=1, value=encabezado)
+        celda.font = Font(bold=True, size=11)
+        celda.fill = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
+        fila += 1
+        es_lista = isinstance(contenido, list)
+        for linea in (contenido if es_lista else [contenido]):
+            texto = f"•  {linea}" if es_lista else linea
+            celda = ws.cell(row=fila, column=1, value=texto)
+            celda.alignment = Alignment(wrap_text=True, vertical="top")
+            ws.row_dimensions[fila].height = 15 * (1 + len(texto) // 95)
+            fila += 1
+        fila += 1
+    return ws
+
+
 def libro_nuevo():
     """Workbook sin la hoja por defecto que crea openpyxl (se agregan las
     hojas reales con las funciones agregar_hoja_*)."""

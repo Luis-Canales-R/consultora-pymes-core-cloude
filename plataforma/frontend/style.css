@@ -212,6 +212,30 @@ h2 { margin-top: 0; }
 .reporte-carga p.err { color: #c23a3a; font-size: 13.5px; margin: 4px 0; }
 .reporte-carga .data-table { font-size: 12.5px; }
 
+.acciones-masivas {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  min-height: 28px;
+}
+.acciones-masivas button[data-accion="desactivar-seleccionados"] {
+  background: none;
+  border: 1px solid #c23a3a;
+  color: #c23a3a;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.acciones-masivas button[data-accion="desactivar-seleccionados"]:hover:not(:disabled) { background: #fdecec; }
+.acciones-masivas button[data-accion="desactivar-seleccionados"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.contador-seleccion { font-size: 12.5px; color: var(--quiet); }
+
 td.acciones { white-space: nowrap; }
 .btn-link {
   background: none;
