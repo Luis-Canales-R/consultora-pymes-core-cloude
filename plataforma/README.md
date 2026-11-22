@@ -49,8 +49,11 @@ Gastos, y Caja ya están adaptados al esquema real.**
 1. El esquema real desplegado (carpeta `/sql`) **más**
    `sql/crear_catalogos_base.sql` (roles, tipo de ítem, unidad de medida,
    categoría — sin esto no se puede registrar ni un tercero ni un producto).
-2. `pip install pyodbc` en la máquina donde corre la plataforma (no viene
-   con Python; hay que instalarlo aparte).
+2. `pip install pyodbc openpyxl` en la máquina donde corre la plataforma
+   (no vienen con Python; hay que instalarlos aparte). `openpyxl` es
+   necesario desde que se agregó la exportación de Informes a Excel
+   (2026-11-22) — sin él, `python app.py` falla con
+   `ModuleNotFoundError: No module named 'openpyxl'`.
 3. El "ODBC Driver 18 for SQL Server" instalado en Windows (normalmente ya
    viene si instalaste SSMS; si no, se descarga de Microsoft).
 
