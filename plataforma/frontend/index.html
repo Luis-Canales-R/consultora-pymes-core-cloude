@@ -459,6 +459,34 @@
         </table>
       </div>
 
+      <div class="panel" id="panel-cierre-honorarios">
+        <div class="panel-header">
+          <h3>Cierre Mensual — Variación de Costeo en Honorarios</h3>
+        </div>
+        <p class="hint">
+          Regulariza la diferencia entre el honorario <b>estándar</b> aplicado al vender Servicios y el honorario
+          <b>real</b> pagado a contratistas. Requiere que los honorarios reales se compren con un ítem cuyo costo
+          apunte directo a la cuenta 2125 (Honorarios Profesionales por Pagar) — ver Hallazgo #21 del plan del
+          proyecto para el detalle. Práctica estándar del mercado: correr este cierre una vez al mes.
+        </p>
+        <div class="cards">
+          <div class="card">
+            <span class="card-label">Saldo pendiente de regularizar (cuenta 2125)</span>
+            <span class="card-value" id="saldo-variacion-honorarios">—</span>
+          </div>
+        </div>
+        <form id="form-cierre-honorarios" class="form-cierre">
+          <label>Periodo a cerrar
+            <input type="month" id="cierre-periodo" required>
+          </label>
+          <label>Fecha del asiento
+            <input type="date" id="cierre-fecha" required>
+          </label>
+          <button type="submit">Cerrar variación de Honorarios</button>
+        </form>
+        <div id="reporte-cierre-honorarios" class="reporte-cierre"></div>
+      </div>
+
       <div class="panel" id="panel-comparacion-periodos">
         <div class="panel-header">
           <h3>Comparación entre Periodos</h3>

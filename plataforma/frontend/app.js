@@ -1078,17 +1078,19 @@ async function loadInformes() {
   // porque `git pull` trae el código pero no corre las migraciones SQL
   // nuevas contra la base real) dejaba TODA la página de Informes vacía,
   // incluso los paneles que ya funcionaban antes.
-  const [balanceR, comparacionR, kpisR, cascadaR] = await Promise.allSettled([
+  const [balanceR, comparacionR, kpisR, cascadaR, saldoHonorariosR] = await Promise.allSettled([
     apiGet("/informes/balance-8-columnas"),
     apiGet("/informes/comparacion-periodos"),
     apiGet("/informes/kpis"),
     apiGet("/informes/estado-resultados-cascada"),
+    apiGet("/cierre/variacion-honorarios/saldo-pendiente"),
   ]);
 
   const panelBalance = document.getElementById("panel-balance-8-columnas");
   const panelComparacion = document.getElementById("panel-comparacion-periodos");
   const panelKpis = document.getElementById("panel-kpis");
   const panelCascada = document.getElementById("panel-cascada-resultados");
+  const panelCierreHonorarios = document.getElementById("panel-cierre-honorarios");
 
   // El modo demo (SQLite, sin plan de cuentas real) lo decide el primer
   // informe de los 3 "clásicos" que haya respondido bien -- los 4 corren
@@ -1103,6 +1105,7 @@ async function loadInformes() {
   panelComparacion.style.display = modoDemo ? "none" : "";
   panelKpis.style.display = modoDemo ? "none" : "";
   panelCascada.style.display = modoDemo ? "none" : "";
+  panelCierreHonorarios.style.display = modoDemo ? "none" : "";
   if (modoDemo) return;
 
   if (balanceR.status === "fulfilled") {
@@ -1135,6 +1138,45 @@ async function loadInformes() {
       `${cascadaR.reason.message} (¿corriste sql/agregar_subclasificacion_resultado.sql contra tu SQL Server?)`
     );
   }
+
+  if (saldoHonorariosR.status === "fulfilled") {
+    limpiarErrorInforme(panelCierreHonorarios);
+    document.getElementById("saldo-variacion-honorarios").textContent = fmtMoney(saldoHonorariosR.value.saldo_pendiente);
+  } else {
+    mostrarErrorInforme(
+      panelCierreHonorarios,
+      `${saldoHonorariosR.reason.message} (¿corriste sql/agregar_variacion_costeo_honorarios.sql contra tu SQL Server?)`
+    );
+  }
+}
+
+function initCierreHonorarios() {
+  const form = document.getElementById("form-cierre-honorarios");
+  const contenedor = document.getElementById("reporte-cierre-honorarios");
+  if (!form) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const periodoInput = document.getElementById("cierre-periodo").value; // "AAAA-MM"
+    const fechaAsiento = document.getElementById("cierre-fecha").value; // "AAAA-MM-DD"
+    if (!periodoInput || !fechaAsiento) return;
+
+    contenedor.innerHTML = "<p>Cerrando…</p>";
+    try {
+      const data = await apiPost("/cierre/variacion-honorarios", {
+        periodo_contable: periodoInput,
+        fecha_asiento: fechaAsiento,
+      });
+      if (data.regularizado) {
+        contenedor.innerHTML = `<p class="ok">Variación regularizada: ${fmtMoney(data.monto_regularizado)} (asiento #${data.id_asiento}).</p>`;
+      } else {
+        contenedor.innerHTML = `<p class="ok">Sin diferencia que regularizar: la cuenta 2125 ya estaba en cero.</p>`;
+      }
+      document.getElementById("saldo-variacion-honorarios").textContent = fmtMoney(0);
+    } catch (err) {
+      contenedor.innerHTML = `<p class="err">${err.message}</p>`;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1165,6 +1207,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initCargaMasiva("ventas", loadVentas);
   initCargaMasiva("compras", loadCompras);
   initCargaMasiva("caja", loadCaja);
+  initCierreHonorarios();
 
   // Carga inicial (vista por defecto: dashboard)
   loadDashboard();

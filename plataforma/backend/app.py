@@ -2837,6 +2837,73 @@ def exportar_cascada_resultados():
     )
 
 
+# ---------------------------------------------------------------------------
+# Fase 6: Regularización de costeo estándar vs. real para Honorarios
+# Subcontratados (ítems SERVICIO), al cierre del periodo. Requiere
+# cat_plan_cuentas 5115 (sql/agregar_variacion_costeo_honorarios.sql) y el
+# stored procedure sp_cerrar_variacion_honorarios (sql/sp_cerrar_variacion_
+# honorarios.sql). Ver Hallazgo #21 del plan del proyecto para el detalle
+# del problema que resuelve (doble conteo de honorarios: una vez al
+# vender el Servicio a costo estándar, otra vez al comprar el honorario
+# real) y la convención de catálogo que requiere: para que la compra de
+# un honorario real "regularice" lo aplicado en vez de duplicar el gasto,
+# el Producto/Servicio que representa ese honorario real debe tener su
+# id_cuenta_costo_gasto apuntando DIRECTO a la cuenta 2125 (Honorarios
+# Profesionales por Pagar), no a 5113.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/cierre/variacion-honorarios/saldo-pendiente", methods=["GET"])
+def saldo_pendiente_variacion_honorarios():
+    if db.DB_ENGINE != "mssql":
+        return jsonify({"modo_demo": True})
+
+    conn = db.get_conn()
+    fila = db.fetch_one_dict(
+        conn,
+        """SELECT ISNULL(SUM(haber), 0) - ISNULL(SUM(debe), 0) AS saldo
+           FROM tbl_asientos_detalle WHERE id_cuenta = 2125""",
+    )
+    conn.close()
+    saldo = float((fila or {}).get("saldo") or 0)
+    return jsonify({"modo_demo": False, "saldo_pendiente": saldo})
+
+
+@app.route("/api/cierre/variacion-honorarios", methods=["POST"])
+def cerrar_variacion_honorarios():
+    if db.DB_ENGINE != "mssql":
+        return error("El cierre de variación requiere el motor contable real (DB_ENGINE=mssql).", 400)
+
+    payload = request.get_json(force=True) or {}
+    missing = require_fields(payload, ["periodo_contable", "fecha_asiento"])
+    if missing:
+        return error(missing)
+
+    conn = db.get_conn()
+    try:
+        cur = conn.execute(
+            "EXEC dbo.sp_cerrar_variacion_honorarios @periodo_contable = ?, @fecha_asiento = ?",
+            (payload["periodo_contable"], payload["fecha_asiento"]),
+        )
+        fila = cur.fetchone()
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return error(f"No se pudo cerrar la variación: {exc}")
+    conn.close()
+
+    id_asiento = fila[0] if fila else None
+    monto = float(fila[1]) if fila and fila[1] is not None else 0.0
+    return jsonify({
+        "id_asiento": id_asiento,
+        "monto_regularizado": monto,
+        "regularizado": id_asiento is not None,
+    })
+
+
 if __name__ == "__main__":
     db.init_db()
     port = int(os.environ.get("PORT", 5000))
