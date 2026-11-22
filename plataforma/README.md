@@ -361,16 +361,61 @@ tabla en pantalla.
 Probado contra SQLite real (crear venta/compra/movimiento de caja por
 API y confirmar en el Excel descargado) y con datos sintéticos que
 imitan las columnas reales de `mssql` (incluyendo el join a nivel de
-línea) vía el test client de Flask — no validado todavía por el usuario
-contra su SQL Server real.
+línea) vía el test client de Flask. **Validado por el usuario contra su
+SQL Server real.**
+
+### Carga masiva de catálogos (Fase 4)
+
+Cada panel de Catálogos (Terceros, Productos/Servicios, Centros de
+Costo) tiene un bloque "Carga masiva" con dos botones: "⬇ Descargar
+Plantilla" y "Cargar Excel".
+
+- `GET /api/terceros/plantilla-carga`, `POST /api/terceros/carga-masiva`
+- `GET /api/productos/plantilla-carga`, `POST /api/productos/carga-masiva`
+- `GET /api/centros_costo/plantilla-carga`, `POST /api/centros_costo/carga-masiva`
+
+**Plantilla = mismo formato que el export** (principio de simetría
+export/import del plan): la plantilla usa los mismos encabezados que la
+exportación a Excel de ese catálogo, con una fila de ejemplo que hay que
+borrar antes de cargar los datos reales.
+
+**Procesamiento fila por fila, sin perder el lote por una fila mala**
+(acordado explícitamente con el usuario): cada fila del Excel se valida
+y se inserta de forma independiente (commit por fila). Si una fila falla
+(campo requerido faltante, RUT/nombre duplicado, número inválido, `Modo
+Obtención` fuera de `COMPRADO_REVENTA`/`FABRICADO`/`SERVICIO`/vacío), se
+rechaza con un motivo claro y las demás filas del mismo archivo se
+cargan igual. La respuesta es un reporte JSON (`total_filas`, `cargados`,
+`rechazados`, `errores: [{fila, motivo}]`) que el frontend muestra como
+una tabla debajo del botón de carga.
+
+Arquitectura: `plataforma/backend/carga_masiva.py` (lectura tolerante de
+`.xlsx` por nombre de encabezado, generación de plantilla reutilizando el
+estilo de `excel_export.py`, motor genérico de carga fila-por-fila). La
+lógica de inserción de cada catálogo se extrajo a `_registrar_tercero` /
+`_registrar_producto` / `_registrar_centro_costo` en `app.py`, reutilizada
+tanto por el alta individual (formulario) como por la carga masiva, para
+que ambos caminos no puedan divergir — en particular, para que la carga
+masiva de Terceros también genere las homologaciones de `map_clientes`
+(ver Hallazgo #5 del plan: un importador que no genera esas
+homologaciones reproduce en masa el problema de "terceros huérfanos").
+
+Probado contra SQLite real (subir un archivo con filas válidas e
+inválidas, confirmar el reporte y los registros creados vía la API) y
+con una conexión `mssql` simulada (tablas equivalentes a las reales, vía
+el test client de Flask) que confirma que la homologación duplicada y el
+`Modo Obtención` inválido se rechazan fila por fila sin perder las filas
+válidas del mismo archivo — no validado todavía por el usuario contra su
+SQL Server real.
 
 ### Pendiente
 
-- Carga masiva de todos los módulos (plantilla descargable, validación
-  fila por fila, reporte de errores) — ver el documento de plan del
-  proyecto para el orden de fases y los riesgos de cada una (Compras/
-  Ventas/Caja requieren generar el mismo asiento contable automático que
-  ya generan sus stored procedures).
+- Carga masiva de los módulos transaccionales (Ventas, Compras, Caja) —
+  Fase 5, la de mayor cuidado: cada fila (o grupo de filas de un mismo
+  folio) debe generar el mismo asiento contable automático que ya
+  generan `sp_procesar_venta_externa`/`sp_procesar_compra_externa`/
+  `sp_procesar_movimiento_caja_externo`. Ver el documento de plan del
+  proyecto para el detalle.
 - Flujo de Caja Proyectado (control de liquidez): no implementado todavía
   — ver el documento de plan del proyecto para el alcance y los pasos
   propuestos (requiere resolver la trazabilidad Caja↔documento y agregar

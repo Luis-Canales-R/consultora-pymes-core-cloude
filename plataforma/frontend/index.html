@@ -242,6 +242,16 @@
           <thead><tr><th>Código</th><th>Razón social</th><th>RUT</th><th>Cliente</th><th>Proveedor</th></tr></thead>
           <tbody></tbody>
         </table>
+        <div class="carga-masiva" id="carga-masiva-terceros" data-modulo="terceros">
+          <h4>Carga masiva</h4>
+          <p class="hint">Descarga la plantilla, reemplaza la fila de ejemplo con tus datos (puedes agregar todas las filas que quieras) y vuelve a subir el mismo archivo.</p>
+          <a class="btn-export" href="/api/terceros/plantilla-carga" download>⬇ Descargar Plantilla</a>
+          <form class="form-carga-masiva">
+            <input type="file" accept=".xlsx" required>
+            <button type="submit">Cargar Excel</button>
+          </form>
+          <div class="reporte-carga"></div>
+        </div>
       </div>
 
       <div class="panel">
@@ -272,6 +282,16 @@
           <thead><tr><th>SKU</th><th>Nombre</th><th>Precio</th><th>Modo obtención</th><th>IVA</th></tr></thead>
           <tbody></tbody>
         </table>
+        <div class="carga-masiva" id="carga-masiva-productos" data-modulo="productos">
+          <h4>Carga masiva</h4>
+          <p class="hint">Descarga la plantilla, reemplaza la fila de ejemplo con tus datos y vuelve a subir el mismo archivo. Modo Obtención acepta COMPRADO_REVENTA, FABRICADO, SERVICIO o vacío.</p>
+          <a class="btn-export" href="/api/productos/plantilla-carga" download>⬇ Descargar Plantilla</a>
+          <form class="form-carga-masiva">
+            <input type="file" accept=".xlsx" required>
+            <button type="submit">Cargar Excel</button>
+          </form>
+          <div class="reporte-carga"></div>
+        </div>
       </div>
 
       <div class="panel">
@@ -288,6 +308,16 @@
           <thead><tr><th>Nombre</th></tr></thead>
           <tbody></tbody>
         </table>
+        <div class="carga-masiva" id="carga-masiva-centros_costo" data-modulo="centros_costo">
+          <h4>Carga masiva</h4>
+          <p class="hint">Descarga la plantilla, reemplaza la fila de ejemplo con tus datos y vuelve a subir el mismo archivo.</p>
+          <a class="btn-export" href="/api/centros_costo/plantilla-carga" download>⬇ Descargar Plantilla</a>
+          <form class="form-carga-masiva">
+            <input type="file" accept=".xlsx" required>
+            <button type="submit">Cargar Excel</button>
+          </form>
+          <div class="reporte-carga"></div>
+        </div>
       </div>
     </section>
 

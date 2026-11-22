@@ -184,6 +184,34 @@ h2 { margin-top: 0; }
 }
 .data-table tbody tr:hover { background: #fafbfc; }
 
+.carga-masiva {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+.carga-masiva h4 { margin: 0 0 4px; font-size: 14px; }
+.carga-masiva .btn-export { display: inline-block; margin-bottom: 10px; }
+.form-carga-masiva {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.form-carga-masiva input[type=file] { font-size: 13px; }
+.form-carga-masiva button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.form-carga-masiva button:hover { filter: brightness(1.08); }
+.reporte-carga p.ok { color: var(--good); font-size: 13.5px; margin: 4px 0; }
+.reporte-carga p.err { color: #c23a3a; font-size: 13.5px; margin: 4px 0; }
+.reporte-carga .data-table { font-size: 12.5px; }
+
 .totales-linea {
   font-size: 14px;
   margin: 10px 0;

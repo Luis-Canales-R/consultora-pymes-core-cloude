@@ -20,6 +20,7 @@ from flask import Flask, jsonify, request, send_file, send_from_directory
 
 import db
 import excel_export
+import carga_masiva
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
@@ -129,6 +130,70 @@ def exportar_terceros():
     )
 
 
+def _registrar_tercero(conn, datos):
+    """Inserta un tercero (+ sus roles + homologación en map_clientes en
+    mssql). NO hace commit ni maneja errores: eso lo decide el llamador,
+    porque el alta individual (crear_tercero) y la carga masiva
+    (carga_masiva.procesar_carga) necesitan controlar el commit/rollback de
+    forma distinta (una fila sola vs. muchas filas independientes).
+    Extraído de crear_tercero para que ambos caminos no puedan divergir en
+    cómo se crea un tercero (ver Hallazgo #5 del plan: todo importador de
+    Terceros debe generar también las homologaciones, no solo el registro).
+    Devuelve el id del tercero creado."""
+    if db.DB_ENGINE == "mssql":
+        new_id = db.next_id(conn, "tbl_terceros", "id_tercero")
+        codigo_tercero = datos.get("codigo_tercero") or f"T-{new_id:04d}"
+        conn.execute(
+            """INSERT INTO tbl_terceros
+               (id_tercero, codigo_tercero, id_tipo_persona, razon_social, rut_dni, id_pais, contacto_email)
+               VALUES (?, ?, 1, ?, ?, 1, ?)""",
+            (new_id, codigo_tercero, datos["razon_social"],
+             datos["rut_dni"], datos.get("contacto_email")),
+        )
+        if datos.get("es_cliente"):
+            conn.execute(
+                "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
+                (new_id, ROL_CLIENTE),
+            )
+        if datos.get("es_proveedor"):
+            conn.execute(
+                "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
+                (new_id, ROL_PROVEEDOR),
+            )
+        if datos.get("es_cliente") or datos.get("es_proveedor"):
+            # Homologación 1:1 (nombre real -> sí mismo), UNA sola vez
+            # por tercero (nombre_informal_excel es UNIQUE en map_clientes),
+            # para que sp_procesar_venta_externa y sp_procesar_compra_externa
+            # puedan resolverlo directo sea cliente, proveedor, o ambos.
+            conn.execute(
+                "INSERT INTO map_clientes (nombre_informal_excel, id_tercero_oficial) VALUES (?, ?)",
+                (datos["razon_social"], new_id),
+            )
+        return new_id
+
+    codigo_tercero = datos.get("codigo_tercero")
+    cur = conn.execute(
+        """INSERT INTO tbl_terceros
+           (codigo_tercero, razon_social, rut_dni, es_cliente, es_proveedor, contacto_email)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            codigo_tercero or f"__pending_{uuid4().hex}",
+            datos["razon_social"],
+            datos["rut_dni"],
+            1 if datos.get("es_cliente") else 0,
+            1 if datos.get("es_proveedor") else 0,
+            datos.get("contacto_email"),
+        ),
+    )
+    new_id = cur.lastrowid
+    if not codigo_tercero:
+        conn.execute(
+            "UPDATE tbl_terceros SET codigo_tercero = ? WHERE id_tercero = ?",
+            (f"T-{new_id:04d}", new_id),
+        )
+    return new_id
+
+
 @app.route("/api/terceros", methods=["POST"])
 def crear_tercero():
     payload = request.get_json(force=True)
@@ -139,72 +204,70 @@ def crear_tercero():
     if missing:
         return error(missing)
     conn = db.get_conn()
-
-    if db.DB_ENGINE == "mssql":
-        try:
-            new_id = db.next_id(conn, "tbl_terceros", "id_tercero")
-            codigo_tercero = payload.get("codigo_tercero") or f"T-{new_id:04d}"
-            conn.execute(
-                """INSERT INTO tbl_terceros
-                   (id_tercero, codigo_tercero, id_tipo_persona, razon_social, rut_dni, id_pais, contacto_email)
-                   VALUES (?, ?, 1, ?, ?, 1, ?)""",
-                (new_id, codigo_tercero, payload["razon_social"],
-                 payload["rut_dni"], payload.get("contacto_email")),
-            )
-            if payload.get("es_cliente"):
-                conn.execute(
-                    "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
-                    (new_id, ROL_CLIENTE),
-                )
-            if payload.get("es_proveedor"):
-                conn.execute(
-                    "INSERT INTO rel_terceros_roles (id_tercero, id_rol) VALUES (?, ?)",
-                    (new_id, ROL_PROVEEDOR),
-                )
-            if payload.get("es_cliente") or payload.get("es_proveedor"):
-                # Homologación 1:1 (nombre real -> sí mismo), UNA sola vez
-                # por tercero (nombre_informal_excel es UNIQUE en map_clientes),
-                # para que sp_procesar_venta_externa y sp_procesar_compra_externa
-                # puedan resolverlo directo sea cliente, proveedor, o ambos.
-                conn.execute(
-                    "INSERT INTO map_clientes (nombre_informal_excel, id_tercero_oficial) VALUES (?, ?)",
-                    (payload["razon_social"], new_id),
-                )
-            conn.commit()
-        except Exception as exc:  # pyodbc.Error también cubierto por Exception
-            conn.rollback()
-            conn.close()
-            return error(f"No se pudo crear el tercero: {exc}")
-        conn.close()
-        return jsonify({"id_tercero": new_id}), 201
-
     try:
-        codigo_tercero = payload.get("codigo_tercero")
-        cur = conn.execute(
-            """INSERT INTO tbl_terceros
-               (codigo_tercero, razon_social, rut_dni, es_cliente, es_proveedor, contacto_email)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (
-                codigo_tercero or f"__pending_{uuid4().hex}",
-                payload["razon_social"],
-                payload["rut_dni"],
-                1 if payload.get("es_cliente") else 0,
-                1 if payload.get("es_proveedor") else 0,
-                payload.get("contacto_email"),
-            ),
-        )
-        new_id = cur.lastrowid
-        if not codigo_tercero:
-            conn.execute(
-                "UPDATE tbl_terceros SET codigo_tercero = ? WHERE id_tercero = ?",
-                (f"T-{new_id:04d}", new_id),
-            )
+        new_id = _registrar_tercero(conn, payload)
         conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except Exception as exc:  # pyodbc.Error / sqlite3.IntegrityError
+        conn.rollback()
         conn.close()
         return error(f"No se pudo crear el tercero: {exc}")
     conn.close()
     return jsonify({"id_tercero": new_id}), 201
+
+
+_COLUMNAS_PLANTILLA_TERCEROS = [
+    ("Código", "codigo_tercero", None),
+    ("Razón Social", "razon_social", None),
+    ("RUT/DNI", "rut_dni", None),
+    ("Email", "contacto_email", None),
+    ("Cliente", "es_cliente", None),
+    ("Proveedor", "es_proveedor", None),
+]
+_EJEMPLO_TERCEROS = {
+    "codigo_tercero": "(dejar vacío para autogenerar)",
+    "razon_social": "BORRAR ESTA FILA - EJEMPLO",
+    "rut_dni": "11.111.111-1",
+    "contacto_email": "contacto@ejemplo.cl",
+    "es_cliente": "No",
+    "es_proveedor": "Sí",
+}
+
+
+@app.route("/api/terceros/plantilla-carga", methods=["GET"])
+def plantilla_terceros():
+    contenido = carga_masiva.generar_plantilla("Terceros", _COLUMNAS_PLANTILLA_TERCEROS, _EJEMPLO_TERCEROS)
+    return send_file(
+        contenido, as_attachment=True,
+        download_name="plantilla_terceros.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/terceros/carga-masiva", methods=["POST"])
+def carga_masiva_terceros():
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return error("Debes adjuntar un archivo .xlsx")
+
+    def fila_a_datos(valores):
+        return {
+            "codigo_tercero": carga_masiva.valor_texto(valores, "Código"),
+            "razon_social": carga_masiva.valor_texto(valores, "Razón Social"),
+            "rut_dni": carga_masiva.valor_texto(valores, "RUT/DNI"),
+            "contacto_email": carga_masiva.valor_texto(valores, "Email"),
+            "es_cliente": carga_masiva.valor_bool(valores, "Cliente"),
+            "es_proveedor": carga_masiva.valor_bool(valores, "Proveedor"),
+        }
+
+    conn = db.get_conn()
+    try:
+        reporte = carga_masiva.procesar_carga(
+            archivo, _COLUMNAS_PLANTILLA_TERCEROS, ["razon_social", "rut_dni"],
+            fila_a_datos, _registrar_tercero, conn,
+        )
+    finally:
+        conn.close()
+    return jsonify(reporte)
 
 
 def _obtener_productos():
@@ -263,6 +326,54 @@ def exportar_productos():
     )
 
 
+def _registrar_producto(conn, datos):
+    """Inserta un producto/servicio (+ homologación en map_productos en
+    mssql). NO hace commit: ver la nota equivalente en _registrar_tercero.
+    Devuelve el id del ítem creado."""
+    if db.DB_ENGINE == "mssql":
+        modo = datos.get("modo_obtencion") or None
+        id_tipo_item = 2 if modo == "SERVICIO" else 1  # 1=PRODUCTO, 2=SERVICIO (cat_tipos_item)
+        # aplica_iva: por defecto afecto (1); se puede marcar exento desde el
+        # formulario (datos["aplica_iva"] == False -> venta exenta de IVA).
+        aplica_iva = 0 if datos.get("aplica_iva") is False else 1
+        new_id = db.next_id(conn, "tbl_productos_servicios", "id_item")
+        sku_codigo = datos.get("sku_codigo") or f"SKU-{new_id:04d}"
+        conn.execute(
+            """INSERT INTO tbl_productos_servicios
+               (id_item, sku_codigo, nombre, id_tipo_item, id_categoria_item,
+                id_unidad_medida, precio_venta_base, aplica_iva, modo_obtencion)
+               VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)""",
+            (new_id, sku_codigo, datos["nombre"], id_tipo_item,
+             datos["precio_venta_base"], aplica_iva, modo),
+        )
+        # Homologación 1:1 para que sp_procesar_venta_externa lo resuelva directo.
+        conn.execute(
+            "INSERT INTO map_productos (descripcion_libre_excel, id_item_oficial) VALUES (?, ?)",
+            (datos["nombre"], new_id),
+        )
+        return new_id
+
+    sku_codigo = datos.get("sku_codigo")
+    cur = conn.execute(
+        """INSERT INTO tbl_productos_servicios
+           (sku_codigo, nombre, precio_venta_base, modo_obtencion)
+           VALUES (?, ?, ?, ?)""",
+        (
+            sku_codigo or f"__pending_{uuid4().hex}",
+            datos["nombre"],
+            datos["precio_venta_base"],
+            datos.get("modo_obtencion"),
+        ),
+    )
+    new_id = cur.lastrowid
+    if not sku_codigo:
+        conn.execute(
+            "UPDATE tbl_productos_servicios SET sku_codigo = ? WHERE id_item = ?",
+            (f"SKU-{new_id:04d}", new_id),
+        )
+    return new_id
+
+
 @app.route("/api/productos", methods=["POST"])
 def crear_producto():
     payload = request.get_json(force=True)
@@ -271,62 +382,88 @@ def crear_producto():
     if missing:
         return error(missing)
     conn = db.get_conn()
-
-    if db.DB_ENGINE == "mssql":
-        modo = payload.get("modo_obtencion") or None
-        id_tipo_item = 2 if modo == "SERVICIO" else 1  # 1=PRODUCTO, 2=SERVICIO (cat_tipos_item)
-        # aplica_iva: por defecto afecto (1); se puede marcar exento desde el
-        # formulario (payload["aplica_iva"] == False -> venta exenta de IVA).
-        aplica_iva = 0 if payload.get("aplica_iva") is False else 1
-        try:
-            new_id = db.next_id(conn, "tbl_productos_servicios", "id_item")
-            sku_codigo = payload.get("sku_codigo") or f"SKU-{new_id:04d}"
-            conn.execute(
-                """INSERT INTO tbl_productos_servicios
-                   (id_item, sku_codigo, nombre, id_tipo_item, id_categoria_item,
-                    id_unidad_medida, precio_venta_base, aplica_iva, modo_obtencion)
-                   VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)""",
-                (new_id, sku_codigo, payload["nombre"], id_tipo_item,
-                 payload["precio_venta_base"], aplica_iva, modo),
-            )
-            # Homologación 1:1 para que sp_procesar_venta_externa lo resuelva directo.
-            conn.execute(
-                "INSERT INTO map_productos (descripcion_libre_excel, id_item_oficial) VALUES (?, ?)",
-                (payload["nombre"], new_id),
-            )
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            conn.close()
-            return error(f"No se pudo crear el producto: {exc}")
-        conn.close()
-        return jsonify({"id_item": new_id}), 201
-
     try:
-        sku_codigo = payload.get("sku_codigo")
-        cur = conn.execute(
-            """INSERT INTO tbl_productos_servicios
-               (sku_codigo, nombre, precio_venta_base, modo_obtencion)
-               VALUES (?, ?, ?, ?)""",
-            (
-                sku_codigo or f"__pending_{uuid4().hex}",
-                payload["nombre"],
-                payload["precio_venta_base"],
-                payload.get("modo_obtencion"),
-            ),
-        )
-        new_id = cur.lastrowid
-        if not sku_codigo:
-            conn.execute(
-                "UPDATE tbl_productos_servicios SET sku_codigo = ? WHERE id_item = ?",
-                (f"SKU-{new_id:04d}", new_id),
-            )
+        new_id = _registrar_producto(conn, payload)
         conn.commit()
-    except sqlite3.IntegrityError as exc:
+    except Exception as exc:
+        conn.rollback()
         conn.close()
         return error(f"No se pudo crear el producto: {exc}")
     conn.close()
     return jsonify({"id_item": new_id}), 201
+
+
+_MODOS_OBTENCION_VALIDOS = {"COMPRADO_REVENTA", "FABRICADO", "SERVICIO"}
+
+_COLUMNAS_PLANTILLA_PRODUCTOS = [
+    ("SKU", "sku_codigo", None),
+    ("Nombre", "nombre", None),
+    ("Precio Venta Base", "precio_venta_base", excel_export.FORMATO_MONEDA),
+    ("IVA", "aplica_iva", None),
+    ("Modo Obtención", "modo_obtencion", None),
+]
+_EJEMPLO_PRODUCTOS = {
+    "sku_codigo": "(dejar vacío para autogenerar)",
+    "nombre": "BORRAR ESTA FILA - EJEMPLO",
+    "precio_venta_base": 15000,
+    "aplica_iva": "Afecto",
+    "modo_obtencion": "COMPRADO_REVENTA (o FABRICADO / SERVICIO / vacío)",
+}
+
+
+@app.route("/api/productos/plantilla-carga", methods=["GET"])
+def plantilla_productos():
+    contenido = carga_masiva.generar_plantilla("Productos", _COLUMNAS_PLANTILLA_PRODUCTOS, _EJEMPLO_PRODUCTOS)
+    return send_file(
+        contenido, as_attachment=True,
+        download_name="plantilla_productos.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/productos/carga-masiva", methods=["POST"])
+def carga_masiva_productos():
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return error("Debes adjuntar un archivo .xlsx")
+
+    def fila_a_datos(valores):
+        iva_txt = carga_masiva.valor_texto(valores, "IVA")
+        modo_txt = carga_masiva.valor_texto(valores, "Modo Obtención")
+        modo = modo_txt.strip().upper() if modo_txt else None
+        datos = {
+            "sku_codigo": carga_masiva.valor_texto(valores, "SKU"),
+            "nombre": carga_masiva.valor_texto(valores, "Nombre"),
+            "precio_venta_base": carga_masiva.valor_numero(valores, "Precio Venta Base"),
+            # Exento solo si dice explícitamente "Exento"; cualquier otra
+            # cosa (vacío, "Afecto") queda afecto, igual que el formulario.
+            "aplica_iva": False if (iva_txt and iva_txt.strip().lower() == "exento") else True,
+            "modo_obtencion": modo,
+        }
+        if modo and modo not in _MODOS_OBTENCION_VALIDOS:
+            datos["_error_modo"] = (
+                f"Modo Obtención '{modo_txt}' no es válido "
+                f"(use COMPRADO_REVENTA, FABRICADO, SERVICIO o déjelo vacío)"
+            )
+        return datos
+
+    conn = db.get_conn()
+    try:
+        # procesar_carga no conoce la regla de modo_obtencion inválido (es
+        # específica de Productos), así que la capturamos en fila_a_datos
+        # con la clave _error_modo y la convertimos en rechazo explícito.
+        def registrar_con_validacion(conn, datos):
+            if datos.get("_error_modo"):
+                raise ValueError(datos["_error_modo"])
+            return _registrar_producto(conn, datos)
+
+        reporte = carga_masiva.procesar_carga(
+            archivo, _COLUMNAS_PLANTILLA_PRODUCTOS, ["nombre", "precio_venta_base"],
+            fila_a_datos, registrar_con_validacion, conn,
+        )
+    finally:
+        conn.close()
+    return jsonify(reporte)
 
 
 def _obtener_centros_costo():
@@ -368,6 +505,25 @@ def exportar_centros_costo():
     )
 
 
+def _registrar_centro_costo(conn, datos):
+    """Inserta un centro de costo. NO hace commit: ver la nota equivalente
+    en _registrar_tercero. Devuelve el id creado."""
+    if db.DB_ENGINE == "mssql":
+        new_id = db.next_id(conn, "tbl_centros_costo", "id_centro_costo")
+        codigo_cc = datos.get("codigo_cc") or f"CC-{new_id:03d}"
+        conn.execute(
+            """INSERT INTO tbl_centros_costo (id_centro_costo, codigo_cc, nombre_cc, nivel)
+               VALUES (?, ?, ?, 1)""",
+            (new_id, codigo_cc, datos["nombre"]),
+        )
+        return new_id
+
+    cur = conn.execute(
+        "INSERT INTO tbl_centros_costo (nombre) VALUES (?)", (datos["nombre"],)
+    )
+    return cur.lastrowid
+
+
 @app.route("/api/centros_costo", methods=["POST"])
 def crear_centro_costo():
     payload = request.get_json(force=True)
@@ -375,35 +531,60 @@ def crear_centro_costo():
     if missing:
         return error(missing)
     conn = db.get_conn()
-
-    if db.DB_ENGINE == "mssql":
-        try:
-            new_id = db.next_id(conn, "tbl_centros_costo", "id_centro_costo")
-            codigo_cc = payload.get("codigo_cc") or f"CC-{new_id:03d}"
-            conn.execute(
-                """INSERT INTO tbl_centros_costo (id_centro_costo, codigo_cc, nombre_cc, nivel)
-                   VALUES (?, ?, ?, 1)""",
-                (new_id, codigo_cc, payload["nombre"]),
-            )
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            conn.close()
-            return error(f"No se pudo crear el centro de costo: {exc}")
-        conn.close()
-        return jsonify({"id_centro_costo": new_id}), 201
-
     try:
-        cur = conn.execute(
-            "INSERT INTO tbl_centros_costo (nombre) VALUES (?)", (payload["nombre"],)
-        )
+        new_id = _registrar_centro_costo(conn, payload)
         conn.commit()
-        new_id = cur.lastrowid
-    except sqlite3.IntegrityError as exc:
+    except Exception as exc:
+        conn.rollback()
         conn.close()
         return error(f"No se pudo crear el centro de costo: {exc}")
     conn.close()
     return jsonify({"id_centro_costo": new_id}), 201
+
+
+_COLUMNAS_PLANTILLA_CENTROS_COSTO = [
+    ("Código", "codigo_cc", None),
+    ("Nombre", "nombre", None),
+]
+_EJEMPLO_CENTROS_COSTO = {
+    "codigo_cc": "(dejar vacío para autogenerar; solo aplica en modo SQL Server)",
+    "nombre": "BORRAR ESTA FILA - EJEMPLO",
+}
+
+
+@app.route("/api/centros_costo/plantilla-carga", methods=["GET"])
+def plantilla_centros_costo():
+    contenido = carga_masiva.generar_plantilla(
+        "Centros de Costo", _COLUMNAS_PLANTILLA_CENTROS_COSTO, _EJEMPLO_CENTROS_COSTO
+    )
+    return send_file(
+        contenido, as_attachment=True,
+        download_name="plantilla_centros_costo.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/centros_costo/carga-masiva", methods=["POST"])
+def carga_masiva_centros_costo():
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return error("Debes adjuntar un archivo .xlsx")
+
+    def fila_a_datos(valores):
+        return {
+            "codigo_cc": carga_masiva.valor_texto(valores, "Código"),
+            "nombre": carga_masiva.valor_texto(valores, "Nombre"),
+        }
+
+    conn = db.get_conn()
+    try:
+        reporte = carga_masiva.procesar_carga(
+            archivo, _COLUMNAS_PLANTILLA_CENTROS_COSTO, ["nombre"],
+            fila_a_datos, _registrar_centro_costo, conn,
+        )
+    finally:
+        conn.close()
+    return jsonify(reporte)
 
 
 # ---------------------------------------------------------------------------

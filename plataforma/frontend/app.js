@@ -574,6 +574,50 @@ function initFormCentro() {
 }
 
 // ---------------------------------------------------------------------------
+// Carga masiva de catálogos (Fase 4 de la meta de Exportación/Carga Masiva)
+// ---------------------------------------------------------------------------
+
+function renderReporteCarga(contenedor, reporte) {
+  const filas = reporte.errores
+    .map((e) => `<tr><td>${e.fila}</td><td>${e.motivo}</td></tr>`)
+    .join("");
+  contenedor.innerHTML = `
+    <p class="${reporte.rechazados === 0 ? "ok" : "err"}">
+      ${reporte.cargados} de ${reporte.total_filas} fila(s) cargadas correctamente
+      ${reporte.rechazados ? `, ${reporte.rechazados} rechazada(s):` : "."}
+    </p>
+    ${filas ? `<table class="data-table"><thead><tr><th>Fila</th><th>Motivo</th></tr></thead><tbody>${filas}</tbody></table>` : ""}
+  `;
+}
+
+function initCargaMasiva(modulo, onCargaOk) {
+  const bloque = document.getElementById(`carga-masiva-${modulo}`);
+  if (!bloque) return;
+  const form = bloque.querySelector(".form-carga-masiva");
+  const input = form.querySelector("input[type=file]");
+  const contenedor = bloque.querySelector(".reporte-carga");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const archivo = input.files[0];
+    if (!archivo) return;
+    contenedor.innerHTML = "<p>Cargando…</p>";
+    try {
+      const fd = new FormData();
+      fd.append("archivo", archivo);
+      const res = await fetch(`${API}/${modulo}/carga-masiva`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error al cargar el archivo");
+      renderReporteCarga(contenedor, data);
+      form.reset();
+      if (onCargaOk) onCargaOk();
+    } catch (err) {
+      contenedor.innerHTML = `<p class="err">${err.message}</p>`;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Informes Financieros Avanzados (Controller)
 // ---------------------------------------------------------------------------
 
@@ -704,6 +748,13 @@ document.addEventListener("DOMContentLoaded", () => {
   initFormTercero();
   initFormProducto();
   initFormCentro();
+  const onCargaMasivaOk = () => {
+    loadCatalogos();
+    refreshCatalogCaches();
+  };
+  initCargaMasiva("terceros", onCargaMasivaOk);
+  initCargaMasiva("productos", onCargaMasivaOk);
+  initCargaMasiva("centros_costo", onCargaMasivaOk);
 
   // Carga inicial (vista por defecto: dashboard)
   loadDashboard();
