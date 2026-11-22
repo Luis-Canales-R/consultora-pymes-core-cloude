@@ -313,10 +313,13 @@
           <label class="checkbox">
             <input type="checkbox" name="aplica_iva" checked> Afecto a IVA
           </label>
+          <label class="checkbox">
+            <input type="checkbox" name="es_honorario_clearing"> Honorario real subcontratado (cancela pasivo 2125 al comprarlo)
+          </label>
           <button type="submit">Agregar producto</button>
           <span class="form-msg" id="msg-producto"></span>
         </form>
-        <p class="hint">Desmarcar "Afecto a IVA" para productos/servicios exentos (ej. algunos servicios de salud). La factura de exportación y otros tipos de documento aún no están modelados.</p>
+        <p class="hint">Desmarcar "Afecto a IVA" para productos/servicios exentos (ej. algunos servicios de salud). La factura de exportación y otros tipos de documento aún no están modelados. Marca "Honorario real subcontratado" solo si este Servicio representa algo que le pagas a un tercero (contador, médico externo, etc.) y que ya aplicas a costo estándar en la Venta (ver Fase 6 / Hallazgo #21 del plan) — así la Compra real cancela el pasivo en vez de duplicar el gasto.</p>
         <div class="tabla-toolbar">
           <input type="search" class="buscar-tabla" id="buscar-productos" placeholder="Buscar por SKU, nombre...">
           <div class="acciones-masivas" data-modulo="productos">

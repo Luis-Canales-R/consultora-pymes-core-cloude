@@ -472,6 +472,7 @@ def _obtener_productos():
             conn,
             """SELECT p.id_item, p.sku_codigo, p.nombre, p.precio_venta_base,
                       p.modo_obtencion, p.aplica_iva, p.estado_activo,
+                      p.id_cuenta_clearing_compra,
                       ti.nombre AS tipo_item, ci.nombre AS categoria, um.nombre AS unidad_medida
                FROM tbl_productos_servicios p
                JOIN cat_tipos_item ti ON ti.id_tipo_item = p.id_tipo_item
@@ -529,15 +530,20 @@ def _registrar_producto(conn, datos):
         # aplica_iva: por defecto afecto (1); se puede marcar exento desde el
         # formulario (datos["aplica_iva"] == False -> venta exenta de IVA).
         aplica_iva = 0 if datos.get("aplica_iva") is False else 1
+        # Fase 6 (ver Hallazgo #21/#22 del plan): si el ítem representa un
+        # honorario real pagado a un tercero subcontratado, su compra debe
+        # cancelar el pasivo 2125 en vez de ir a la cuenta de gasto normal.
+        id_cuenta_clearing_compra = 2125 if datos.get("es_honorario_clearing") else None
         new_id = db.next_id(conn, "tbl_productos_servicios", "id_item")
         sku_codigo = datos.get("sku_codigo") or f"SKU-{new_id:04d}"
         conn.execute(
             """INSERT INTO tbl_productos_servicios
                (id_item, sku_codigo, nombre, id_tipo_item, id_categoria_item,
-                id_unidad_medida, precio_venta_base, aplica_iva, modo_obtencion)
-               VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)""",
+                id_unidad_medida, precio_venta_base, aplica_iva, modo_obtencion,
+                id_cuenta_clearing_compra)
+               VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?, ?)""",
             (new_id, sku_codigo, datos["nombre"], id_tipo_item,
-             datos["precio_venta_base"], aplica_iva, modo),
+             datos["precio_venta_base"], aplica_iva, modo, id_cuenta_clearing_compra),
         )
         # Homologación 1:1 para que sp_procesar_venta_externa lo resuelva directo.
         conn.execute(
@@ -726,12 +732,15 @@ def editar_producto(id_item):
         if db.DB_ENGINE == "mssql":
             modo = payload.get("modo_obtencion") or None
             aplica_iva = 0 if payload.get("aplica_iva") is False else 1
+            # Fase 6: ver nota equivalente en _registrar_producto.
+            id_cuenta_clearing_compra = 2125 if payload.get("es_honorario_clearing") else None
             conn.execute(
                 """UPDATE tbl_productos_servicios SET sku_codigo = COALESCE(?, sku_codigo),
-                   nombre = ?, precio_venta_base = ?, aplica_iva = ?, modo_obtencion = ?
+                   nombre = ?, precio_venta_base = ?, aplica_iva = ?, modo_obtencion = ?,
+                   id_cuenta_clearing_compra = ?
                    WHERE id_item = ?""",
                 (payload.get("sku_codigo"), payload["nombre"], payload["precio_venta_base"],
-                 aplica_iva, modo, id_item),
+                 aplica_iva, modo, id_cuenta_clearing_compra, id_item),
             )
             _homologar_nombre(
                 conn, "map_productos", "descripcion_libre_excel", "id_item_oficial",

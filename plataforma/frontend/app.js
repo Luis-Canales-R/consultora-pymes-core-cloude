@@ -800,6 +800,7 @@ function initFormProducto() {
       form.precio_venta_base.value = p.precio_venta_base || "";
       form.modo_obtencion.value = p.modo_obtencion || "";
       form.aplica_iva.checked = !(p.aplica_iva === false || p.aplica_iva === 0);
+      form.es_honorario_clearing.checked = !!p.id_cuenta_clearing_compra;
       entrarModoEdicion(form, id, boton);
       form.scrollIntoView({ behavior: "smooth", block: "center" });
     } else if (btn.dataset.accion === "desactivar") {
