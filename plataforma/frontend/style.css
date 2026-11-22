@@ -250,6 +250,15 @@ h2 { margin-top: 0; }
 .reporte-carga p.ok { color: var(--good); font-size: 13.5px; margin: 4px 0; }
 .reporte-carga p.err { color: #c23a3a; font-size: 13.5px; margin: 4px 0; }
 .reporte-carga .data-table { font-size: 12.5px; }
+.informe-error {
+  color: #c23a3a;
+  background: #fdecec;
+  border: 1px solid #f1c2c2;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  margin: 8px 0;
+}
 
 .acciones-masivas {
   display: flex;

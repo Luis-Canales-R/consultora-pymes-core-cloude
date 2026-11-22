@@ -939,23 +939,22 @@ function fmtPctKpi(n) {
   return n === null || n === undefined ? "N/D" : `${n.toFixed(1)}%`;
 }
 
-async function loadInformes() {
-  const [balance, comparacion, kpis, cascada] = await Promise.all([
-    apiGet("/informes/balance-8-columnas"),
-    apiGet("/informes/comparacion-periodos"),
-    apiGet("/informes/kpis"),
-    apiGet("/informes/estado-resultados-cascada"),
-  ]);
+function mostrarErrorInforme(panel, mensaje) {
+  let p = panel.querySelector(".informe-error");
+  if (!p) {
+    p = document.createElement("p");
+    p.className = "informe-error";
+    panel.querySelector(".panel-header").insertAdjacentElement("afterend", p);
+  }
+  p.textContent = `No se pudo cargar este informe: ${mensaje}`;
+}
 
-  const modoDemo = balance.modo_demo || comparacion.modo_demo || kpis.modo_demo || cascada.modo_demo;
-  document.getElementById("informes-modo-demo").style.display = modoDemo ? "" : "none";
-  document.getElementById("panel-kpis").style.display = modoDemo ? "none" : "";
-  document.getElementById("panel-cascada-resultados").style.display = modoDemo ? "none" : "";
-  document.getElementById("panel-comparacion-periodos").style.display = modoDemo ? "none" : "";
-  document.getElementById("panel-balance-8-columnas").style.display = modoDemo ? "none" : "";
-  if (modoDemo) return;
+function limpiarErrorInforme(panel) {
+  const p = panel.querySelector(".informe-error");
+  if (p) p.remove();
+}
 
-  // --- EBITDA / Estado de Resultados en cascada ---
+function renderCascadaResultados(cascada) {
   const filasCascada = [
     ["Ventas Netas (Ingresos)", cascada.ingresos, false],
     ["(-) Costo de Ventas", -cascada.costo_venta, false],
@@ -985,8 +984,9 @@ async function loadInformes() {
     tr.innerHTML = `<td>${etiqueta}</td><td style="text-align:right">${fmtMoney(monto)}</td>`;
     tbodyCascada.appendChild(tr);
   });
+}
 
-  // --- KPIs ---
+function renderKpis(kpis) {
   document.getElementById("kpi-razon-corriente").textContent = fmtRatio(kpis.liquidez.razon_corriente);
   document.getElementById("kpi-prueba-acida").textContent = fmtRatio(kpis.liquidez.prueba_acida);
   document.getElementById("kpi-capital-trabajo").textContent = fmtMoney(kpis.liquidez.capital_trabajo);
@@ -996,8 +996,9 @@ async function loadInformes() {
   document.getElementById("kpi-margen-neto").textContent = fmtPctKpi(kpis.rentabilidad.margen_neto_pct);
   document.getElementById("kpi-roe").textContent = fmtPctKpi(kpis.rentabilidad.roe_pct);
   document.getElementById("kpi-roa").textContent = fmtPctKpi(kpis.rentabilidad.roa_pct);
+}
 
-  // --- Comparación entre periodos ---
+function renderComparacionPeriodos(comparacion) {
   const tbodyMensual = document.querySelector("#tabla-comparacion-mensual tbody");
   tbodyMensual.innerHTML = "";
   comparacion.periodos.forEach((p) => {
@@ -1026,8 +1027,9 @@ async function loadInformes() {
     `;
     tbodyYtd.appendChild(tr);
   });
+}
 
-  // --- Balance de 8 Columnas ---
+function renderBalanceOchoColumnas(balance) {
   const tbodyBalance = document.querySelector("#tabla-balance-8-columnas tbody");
   tbodyBalance.innerHTML = "";
   balance.cuentas.forEach((c) => {
@@ -1064,6 +1066,75 @@ async function loadInformes() {
       <td>${fmtMoney(t.ganancia)}</td>
     </tr>
   `;
+}
+
+async function loadInformes() {
+  // Promise.allSettled (no Promise.all): si UN informe falla (ej. falta
+  // correr una migración SQL nueva, como sql/agregar_subclasificacion_resultado.sql,
+  // y la tabla/columna todavía no existe en el SQL Server del usuario),
+  // los otros tres NO deben quedar en blanco -- cada panel se resuelve de
+  // forma independiente. Bug corregido 2026-11-22: antes esto usaba
+  // Promise.all, así que un solo informe nuevo que fallara (típicamente
+  // porque `git pull` trae el código pero no corre las migraciones SQL
+  // nuevas contra la base real) dejaba TODA la página de Informes vacía,
+  // incluso los paneles que ya funcionaban antes.
+  const [balanceR, comparacionR, kpisR, cascadaR] = await Promise.allSettled([
+    apiGet("/informes/balance-8-columnas"),
+    apiGet("/informes/comparacion-periodos"),
+    apiGet("/informes/kpis"),
+    apiGet("/informes/estado-resultados-cascada"),
+  ]);
+
+  const panelBalance = document.getElementById("panel-balance-8-columnas");
+  const panelComparacion = document.getElementById("panel-comparacion-periodos");
+  const panelKpis = document.getElementById("panel-kpis");
+  const panelCascada = document.getElementById("panel-cascada-resultados");
+
+  // El modo demo (SQLite, sin plan de cuentas real) lo decide el primer
+  // informe de los 3 "clásicos" que haya respondido bien -- los 4 corren
+  // sobre el mismo DB_ENGINE, así que alcanza con uno. Si ese también
+  // falló (error real, no demo), se trata cada panel por separado más
+  // abajo en vez de asumir nada.
+  const primerOk = [balanceR, comparacionR, kpisR].find((r) => r.status === "fulfilled");
+  const modoDemo = primerOk ? primerOk.value.modo_demo : false;
+  document.getElementById("informes-modo-demo").style.display = modoDemo ? "" : "none";
+
+  panelBalance.style.display = modoDemo ? "none" : "";
+  panelComparacion.style.display = modoDemo ? "none" : "";
+  panelKpis.style.display = modoDemo ? "none" : "";
+  panelCascada.style.display = modoDemo ? "none" : "";
+  if (modoDemo) return;
+
+  if (balanceR.status === "fulfilled") {
+    limpiarErrorInforme(panelBalance);
+    renderBalanceOchoColumnas(balanceR.value);
+  } else {
+    mostrarErrorInforme(panelBalance, balanceR.reason.message);
+  }
+
+  if (comparacionR.status === "fulfilled") {
+    limpiarErrorInforme(panelComparacion);
+    renderComparacionPeriodos(comparacionR.value);
+  } else {
+    mostrarErrorInforme(panelComparacion, comparacionR.reason.message);
+  }
+
+  if (kpisR.status === "fulfilled") {
+    limpiarErrorInforme(panelKpis);
+    renderKpis(kpisR.value);
+  } else {
+    mostrarErrorInforme(panelKpis, kpisR.reason.message);
+  }
+
+  if (cascadaR.status === "fulfilled") {
+    limpiarErrorInforme(panelCascada);
+    renderCascadaResultados(cascadaR.value);
+  } else {
+    mostrarErrorInforme(
+      panelCascada,
+      `${cascadaR.reason.message} (¿corriste sql/agregar_subclasificacion_resultado.sql contra tu SQL Server?)`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
