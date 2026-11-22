@@ -1107,6 +1107,42 @@ def _validar_lineas(payload):
     return None
 
 
+def _ejecutar_linea_venta_mssql(conn, folio, fecha, nombre_cliente, nombre_producto,
+                                 cantidad, precio_unitario, estado_venta, id_centro_costo,
+                                 id_asiento_existente):
+    """Ejecuta sp_procesar_venta_externa para UNA línea de un documento de
+    Venta. NO hace commit (eso lo decide el llamador, igual que el resto de
+    los helpers "registrar sin commit" de este archivo -- ver Hallazgo #12
+    del plan). Extraído de crear_venta para que el alta individual (loop de
+    líneas de un solo folio) y la carga masiva (Fase 5, loop de líneas de
+    TODOS los folios del archivo) usen exactamente la misma llamada al SP y
+    no puedan divergir.
+
+    Devuelve el id_asiento resultante: el nuevo asiento si el SP creó uno,
+    o el mismo id_asiento_existente si esta línea se agregó a un asiento ya
+    abierto (así el llamador puede reenviarlo a la siguiente línea del mismo
+    folio para que todas compartan un solo asiento contable)."""
+    cur = conn.execute(
+        """EXEC dbo.sp_procesar_venta_externa
+               @folio_factura = ?, @fecha_emision = ?,
+               @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
+               @cantidad = ?, @precio_unitario = ?,
+               @estado_venta = ?, @id_centro_costo = ?,
+               @id_asiento_existente = ?""",
+        (
+            folio, fecha, nombre_cliente, nombre_producto,
+            float(cantidad), float(precio_unitario), estado_venta,
+            id_centro_costo, id_asiento_existente,
+        ),
+    )
+    # El SP devuelve el id_asiento como un SELECT propio (no como parámetro
+    # OUTPUT -- pyodbc no lo maneja bien en un solo EXEC).
+    fila_asiento = cur.fetchone()
+    if fila_asiento and fila_asiento[0]:
+        return fila_asiento[0]
+    return id_asiento_existente
+
+
 @app.route("/api/ventas", methods=["POST"])
 def crear_venta():
     payload = request.get_json(force=True)
@@ -1149,27 +1185,13 @@ def crear_venta():
                 if not producto:
                     raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
 
-                cur = conn.execute(
-                    """EXEC dbo.sp_procesar_venta_externa
-                           @folio_factura = ?, @fecha_emision = ?,
-                           @nombre_informal_cliente = ?, @descripcion_libre_item = ?,
-                           @cantidad = ?, @precio_unitario = ?,
-                           @estado_venta = ?, @id_centro_costo = ?,
-                           @id_asiento_existente = ?""",
-                    (
-                        payload["folio_factura"], payload["fecha_emision"],
-                        cliente["razon_social"], producto["nombre"],
-                        float(linea["cantidad"]), float(linea["precio_unitario"]),
-                        payload.get("estado_venta", "DEVENGADO"),
-                        payload.get("id_centro_costo"),
-                        id_asiento_actual,
-                    ),
+                id_asiento_actual = _ejecutar_linea_venta_mssql(
+                    conn, payload["folio_factura"], payload["fecha_emision"],
+                    cliente["razon_social"], producto["nombre"],
+                    linea["cantidad"], linea["precio_unitario"],
+                    payload.get("estado_venta", "DEVENGADO"), payload.get("id_centro_costo"),
+                    id_asiento_actual,
                 )
-                # El SP devuelve el id_asiento como un SELECT propio (no como
-                # parámetro OUTPUT -- pyodbc no lo maneja bien en un solo EXEC).
-                fila_asiento = cur.fetchone()
-                if fila_asiento and fila_asiento[0]:
-                    id_asiento_actual = fila_asiento[0]
 
             conn.commit()
             resultado = db.fetch_one_dict(
@@ -1223,6 +1245,217 @@ def crear_venta():
         return error(f"No se pudo registrar la venta: {exc}")
     conn.close()
     return jsonify({"id_venta_devengada": new_id, "monto_iva": monto_iva, "monto_total": monto_total}), 201
+
+
+# --- Carga masiva de Ventas (Fase 5) ---------------------------------------
+#
+# Cada fila del Excel es UNA LÍNEA de un documento de venta (un folio puede
+# traer varias filas, una por ítem -- igual que exportar_ventas en mssql, por
+# la simetría export/import definida en el plan). El motor genérico de
+# carga_masiva.procesar_carga (ver ese módulo) ya garantiza "todo o nada" a
+# nivel de TODO el archivo: si cualquier línea de cualquier folio falla su
+# validación, o algo inesperado falla al guardar, no se registra ninguna
+# venta del archivo completo.
+#
+# Encadenado de asiento por folio: varias líneas del mismo folio deben
+# compartir un solo asiento contable (igual que crear_venta). El motor
+# genérico llama a registrar_fn(conn, datos) fila por fila sin mantener
+# estado entre llamadas, así que ese encadenado se guarda en el diccionario
+# `estado_folios` (closure, uno por llamada al endpoint) que mapea
+# folio -> id_asiento ya abierto para ese folio.
+
+_COLUMNAS_PLANTILLA_VENTAS = [
+    ("Folio", "folio_factura", None),
+    ("Fecha Emisión", "fecha_emision", None),
+    ("Cliente", "cliente", None),
+    ("Centro de Costo", "centro_costo", None),
+    ("Estado", "estado_venta", None),
+    ("Producto/Servicio", "producto", None),
+    ("Cantidad", "cantidad", "#,##0.0000"),
+    ("Precio Unitario", "precio_unitario", excel_export.FORMATO_MONEDA),
+]
+_EJEMPLO_VENTAS = {
+    "folio_factura": "BORRAR ESTA FILA - EJEMPLO",
+    "fecha_emision": "2026-11-01",
+    "cliente": "(debe existir en Terceros, marcado como Cliente)",
+    "centro_costo": "(opcional)",
+    "estado_venta": "DEVENGADO",
+    "producto": "(debe existir en Productos y Servicios)",
+    "cantidad": 1,
+    "precio_unitario": 10000,
+}
+_INSTRUCTIVO_VENTAS = {
+    "titulo": "Instructivo de carga masiva — Ventas",
+    "secciones": [
+        ("Antes de empezar", [
+            "Esta plantilla carga ventas NUEVAS. Un Folio puede repetirse en varias filas "
+            "cuando el documento tiene varios ítems: cada fila es una LÍNEA del documento, "
+            "no un documento completo. Todas las filas de un mismo Folio deben tener el "
+            "mismo Cliente y la misma Fecha Emisión (son el mismo documento).",
+            "Si el Folio ya existe en el sistema (de una carga o alta anterior), la fila se "
+            "rechaza: esta plantilla no sirve para agregar líneas a una venta ya cargada.",
+            "La carga es TODO O NADA: si una sola fila de todo el archivo tiene un error, no "
+            "se carga ninguna venta (de ningún folio). El reporte muestra todas las filas con "
+            "error de una sola vez.",
+            "Borra la fila de ejemplo antes de cargar.",
+        ]),
+        ("Requisitos por columna", [
+            "Folio: obligatorio.",
+            "Fecha Emisión: obligatoria, formato AAAA-MM-DD (ej. 2026-11-01).",
+            "Cliente: obligatorio. Debe coincidir EXACTAMENTE con la Razón Social de un "
+            "tercero ya cargado y marcado como Cliente (ver pestaña Terceros).",
+            "Centro de Costo: opcional. Si se informa, debe coincidir con uno ya cargado.",
+            "Estado: opcional (si se deja vacío, queda como DEVENGADO). Valores válidos: "
+            "DEVENGADO, FACTURADO, PAGADO, ANULADO.",
+            "Producto/Servicio: obligatorio. Debe coincidir EXACTAMENTE con el Nombre de un "
+            "ítem ya cargado en Productos y Servicios.",
+            "Cantidad: obligatoria, mayor a cero.",
+            "Precio Unitario: obligatorio, no puede ser negativo.",
+        ]),
+        ("Lo que no cubre esta plantilla", [
+            "No admite descuentos por línea: el sistema calcula el IVA y el total de cada "
+            "línea directo desde Cantidad x Precio Unitario.",
+            "No permite editar una venta ya cargada (usa el botón \"Editar\" de la tabla, o "
+            "pide una venta de ajuste/reverso).",
+        ]),
+    ],
+}
+
+
+@app.route("/api/ventas/plantilla-carga", methods=["GET"])
+def plantilla_ventas():
+    contenido = carga_masiva.generar_plantilla(
+        "Ventas", _COLUMNAS_PLANTILLA_VENTAS, _EJEMPLO_VENTAS, _INSTRUCTIVO_VENTAS
+    )
+    return send_file(
+        contenido, as_attachment=True,
+        download_name="plantilla_ventas.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def _fila_a_datos_venta(valores):
+    return {
+        "folio_factura": carga_masiva.valor_texto(valores, "Folio"),
+        "fecha_emision": carga_masiva.valor_texto(valores, "Fecha Emisión"),
+        "cliente": carga_masiva.valor_texto(valores, "Cliente"),
+        "centro_costo": carga_masiva.valor_texto(valores, "Centro de Costo"),
+        "estado_venta": carga_masiva.valor_texto(valores, "Estado") or "DEVENGADO",
+        "producto": carga_masiva.valor_texto(valores, "Producto/Servicio"),
+        "cantidad": carga_masiva.valor_numero(valores, "Cantidad"),
+        "precio_unitario": carga_masiva.valor_numero(valores, "Precio Unitario"),
+    }
+
+
+def _validar_fila_venta(conn, datos, vistos):
+    if datos["estado_venta"] not in ("DEVENGADO", "FACTURADO", "PAGADO", "ANULADO"):
+        return (f"Estado '{datos['estado_venta']}' inválido "
+                f"(debe ser DEVENGADO, FACTURADO, PAGADO o ANULADO)")
+    if datos["cantidad"] is None or datos["cantidad"] <= 0:
+        return "Cantidad debe ser un número mayor a cero"
+    if datos["precio_unitario"] is None or datos["precio_unitario"] < 0:
+        return "Precio Unitario debe ser un número no negativo"
+    try:
+        date.fromisoformat(str(datos["fecha_emision"])[:10])
+    except ValueError:
+        return f"Fecha Emisión '{datos['fecha_emision']}' no es una fecha válida (formato AAAA-MM-DD)"
+
+    id_centro_costo = None
+    if datos.get("centro_costo"):
+        if db.DB_ENGINE == "mssql":
+            cc = db.fetch_one_dict(conn, "SELECT id_centro_costo FROM tbl_centros_costo WHERE nombre_cc = ?", (datos["centro_costo"],))
+        else:
+            cc = db.fetch_one_dict(conn, "SELECT id_centro_costo FROM tbl_centros_costo WHERE nombre = ?", (datos["centro_costo"],))
+        if not cc:
+            return f"Centro de Costo '{datos['centro_costo']}' no existe"
+        id_centro_costo = cc["id_centro_costo"]
+    datos["_id_centro_costo"] = id_centro_costo
+
+    if db.DB_ENGINE == "mssql":
+        if not db.fetch_one_dict(conn, "SELECT 1 FROM map_clientes WHERE nombre_informal_excel = ?", (datos["cliente"],)):
+            return f"Cliente '{datos['cliente']}' no está registrado en Terceros (como Cliente)"
+        if not db.fetch_one_dict(conn, "SELECT 1 FROM map_productos WHERE descripcion_libre_excel = ?", (datos["producto"],)):
+            return f"Producto/Servicio '{datos['producto']}' no está registrado en Productos y Servicios"
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_ventas_devengadas WHERE folio_factura = ?", (datos["folio_factura"],)):
+            # Puede ser que el folio ya exista porque una fila ANTERIOR de
+            # este mismo archivo ya lo creó (línea 2+ de un mismo documento,
+            # caso normal) -- eso no es un error. Solo es error si el folio
+            # ya existía ANTES de empezar a procesar este archivo.
+            if datos["folio_factura"] not in vistos.setdefault("folios_creados_en_este_archivo", set()):
+                return f"El folio '{datos['folio_factura']}' ya existe (no se pueden agregar líneas a una venta ya cargada)"
+    else:
+        tercero = db.fetch_one_dict(conn, "SELECT id_tercero FROM tbl_terceros WHERE razon_social = ?", (datos["cliente"],))
+        if not tercero:
+            return f"Cliente '{datos['cliente']}' no está registrado en Terceros"
+        datos["_id_tercero"] = tercero["id_tercero"]
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_ventas_devengadas WHERE folio_factura = ?", (datos["folio_factura"],)):
+            return f"El folio '{datos['folio_factura']}' ya existe"
+
+    # Consistencia dentro del archivo: todas las filas de un mismo Folio
+    # son líneas del MISMO documento, así que deben compartir Cliente y
+    # Fecha Emisión.
+    folios_vistos = vistos.setdefault("folios", {})
+    previo = folios_vistos.get(datos["folio_factura"])
+    if previo is None:
+        folios_vistos[datos["folio_factura"]] = {"cliente": datos["cliente"], "fecha_emision": datos["fecha_emision"]}
+        vistos.setdefault("folios_creados_en_este_archivo", set()).add(datos["folio_factura"])
+    else:
+        if previo["cliente"] != datos["cliente"]:
+            return f"El folio '{datos['folio_factura']}' ya tiene otro Cliente en una fila anterior de este archivo"
+        if previo["fecha_emision"] != datos["fecha_emision"]:
+            return f"El folio '{datos['folio_factura']}' ya tiene otra Fecha Emisión en una fila anterior de este archivo"
+        if db.DB_ENGINE != "mssql":
+            return f"El folio '{datos['folio_factura']}' está repetido en más de una fila (en SQLite demo cada folio admite una sola línea)"
+    return None
+
+
+@app.route("/api/ventas/carga-masiva", methods=["POST"])
+def carga_masiva_ventas():
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return error("Debes adjuntar un archivo .xlsx")
+
+    # Encadenado de asiento por folio (ver nota arriba): se guarda entre
+    # llamadas a registrar_fn de este mismo archivo.
+    estado_folios = {}
+
+    def registrar_fn(conn, datos):
+        if db.DB_ENGINE == "mssql":
+            id_asiento_actual = estado_folios.get(datos["folio_factura"])
+            nuevo_id_asiento = _ejecutar_linea_venta_mssql(
+                conn, datos["folio_factura"], datos["fecha_emision"],
+                datos["cliente"], datos["producto"],
+                datos["cantidad"], datos["precio_unitario"],
+                datos["estado_venta"], datos.get("_id_centro_costo"),
+                id_asiento_actual,
+            )
+            estado_folios[datos["folio_factura"]] = nuevo_id_asiento
+            return
+
+        monto_neto = round(float(datos["cantidad"]) * float(datos["precio_unitario"]), 2)
+        monto_iva = round(monto_neto * IVA_RATE, 2)
+        monto_total = round(monto_neto + monto_iva, 2)
+        conn.execute(
+            """INSERT INTO tbl_ventas_devengadas
+               (folio_factura, id_tercero, id_centro_costo, fecha_emision,
+                monto_neto, monto_iva, monto_total, estado_venta)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                datos["folio_factura"], datos["_id_tercero"], datos.get("_id_centro_costo"),
+                datos["fecha_emision"], monto_neto, monto_iva, monto_total, datos["estado_venta"],
+            ),
+        )
+
+    conn = db.get_conn()
+    try:
+        reporte = carga_masiva.procesar_carga(
+            archivo, _COLUMNAS_PLANTILLA_VENTAS,
+            ["folio_factura", "fecha_emision", "cliente", "producto", "cantidad", "precio_unitario"],
+            _fila_a_datos_venta, registrar_fn, conn, validar_fn=_validar_fila_venta,
+        )
+    finally:
+        conn.close()
+    return jsonify(reporte)
 
 
 # ---------------------------------------------------------------------------
@@ -1333,6 +1566,32 @@ def exportar_compras():
 
 
 @app.route("/api/compras", methods=["POST"])
+def _ejecutar_linea_compra_mssql(conn, folio, fecha, nombre_proveedor, nombre_producto,
+                                  cantidad, precio_unitario, estado_oc, id_centro_costo,
+                                  id_asiento_existente):
+    """Análogo a _ejecutar_linea_venta_mssql, para sp_procesar_compra_externa
+    (ver esa función para la explicación del patrón "registrar sin commit" /
+    encadenado de asiento por folio)."""
+    cur = conn.execute(
+        """EXEC dbo.sp_procesar_compra_externa
+               @folio_oc = ?, @fecha_emision = ?,
+               @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
+               @cantidad = ?, @precio_unitario = ?,
+               @estado_oc = ?, @id_centro_costo = ?,
+               @id_asiento_existente = ?""",
+        (
+            folio, fecha, nombre_proveedor, nombre_producto,
+            float(cantidad), float(precio_unitario), estado_oc,
+            id_centro_costo, id_asiento_existente,
+        ),
+    )
+    fila_asiento = cur.fetchone()
+    if fila_asiento and fila_asiento[0]:
+        return fila_asiento[0]
+    return id_asiento_existente
+
+
+@app.route("/api/compras", methods=["POST"])
 def crear_compra():
     payload = request.get_json(force=True)
 
@@ -1375,27 +1634,13 @@ def crear_compra():
                 if not producto:
                     raise ValueError(f"Línea {i}: producto/servicio no encontrado.")
 
-                cur = conn.execute(
-                    """EXEC dbo.sp_procesar_compra_externa
-                           @folio_oc = ?, @fecha_emision = ?,
-                           @nombre_informal_proveedor = ?, @descripcion_libre_item = ?,
-                           @cantidad = ?, @precio_unitario = ?,
-                           @estado_oc = ?, @id_centro_costo = ?,
-                           @id_asiento_existente = ?""",
-                    (
-                        payload["folio_oc"], payload["fecha_emision"],
-                        proveedor["razon_social"], producto["nombre"],
-                        float(linea["cantidad"]), float(linea["precio_unitario"]),
-                        payload.get("estado_oc", "RECIBIDA"),
-                        payload.get("id_centro_costo"),
-                        id_asiento_actual,
-                    ),
+                id_asiento_actual = _ejecutar_linea_compra_mssql(
+                    conn, payload["folio_oc"], payload["fecha_emision"],
+                    proveedor["razon_social"], producto["nombre"],
+                    linea["cantidad"], linea["precio_unitario"],
+                    payload.get("estado_oc", "RECIBIDA"), payload.get("id_centro_costo"),
+                    id_asiento_actual,
                 )
-                # El SP devuelve el id_asiento como un SELECT propio (no como
-                # parámetro OUTPUT -- pyodbc no lo maneja bien en un solo EXEC).
-                fila_asiento = cur.fetchone()
-                if fila_asiento and fila_asiento[0]:
-                    id_asiento_actual = fila_asiento[0]
 
             conn.commit()
             resultado = db.fetch_one_dict(
@@ -1452,6 +1697,199 @@ def crear_compra():
         return error(f"No se pudo registrar la compra: {exc}")
     conn.close()
     return jsonify({"id_compra": new_id, "monto_iva": monto_iva, "monto_total": monto_total}), 201
+
+
+# --- Carga masiva de Compras (Fase 5) --------------------------------------
+# Mismo modelo que la carga masiva de Ventas (ver esa sección para el
+# detalle del patrón "una fila = una línea de un folio" y el encadenado de
+# asiento): aquí solo cambian los nombres (Proveedor en vez de Cliente,
+# Estado OC en vez de Estado Venta) y el SP que se llama.
+
+_COLUMNAS_PLANTILLA_COMPRAS = [
+    ("Folio", "folio_oc", None),
+    ("Fecha Emisión", "fecha_emision", None),
+    ("Proveedor", "proveedor", None),
+    ("Centro de Costo", "centro_costo", None),
+    ("Estado", "estado_oc", None),
+    ("Producto/Servicio", "producto", None),
+    ("Cantidad", "cantidad", "#,##0.0000"),
+    ("Precio Unitario", "precio_unitario", excel_export.FORMATO_MONEDA),
+]
+_EJEMPLO_COMPRAS = {
+    "folio_oc": "BORRAR ESTA FILA - EJEMPLO",
+    "fecha_emision": "2026-11-01",
+    "proveedor": "(debe existir en Terceros, marcado como Proveedor)",
+    "centro_costo": "(opcional)",
+    "estado_oc": "RECIBIDA",
+    "producto": "(debe existir en Productos y Servicios)",
+    "cantidad": 1,
+    "precio_unitario": 10000,
+}
+_INSTRUCTIVO_COMPRAS = {
+    "titulo": "Instructivo de carga masiva — Compras",
+    "secciones": [
+        ("Antes de empezar", [
+            "Esta plantilla carga compras NUEVAS. Un Folio puede repetirse en varias filas "
+            "cuando el documento tiene varios ítems: cada fila es una LÍNEA del documento, "
+            "no un documento completo. Todas las filas de un mismo Folio deben tener el "
+            "mismo Proveedor y la misma Fecha Emisión (son el mismo documento).",
+            "Si el Folio ya existe en el sistema (de una carga o alta anterior), la fila se "
+            "rechaza: esta plantilla no sirve para agregar líneas a una compra ya cargada.",
+            "La carga es TODO O NADA: si una sola fila de todo el archivo tiene un error, no "
+            "se carga ninguna compra (de ningún folio). El reporte muestra todas las filas con "
+            "error de una sola vez.",
+            "Borra la fila de ejemplo antes de cargar.",
+        ]),
+        ("Requisitos por columna", [
+            "Folio: obligatorio.",
+            "Fecha Emisión: obligatoria, formato AAAA-MM-DD (ej. 2026-11-01).",
+            "Proveedor: obligatorio. Debe coincidir EXACTAMENTE con la Razón Social de un "
+            "tercero ya cargado y marcado como Proveedor (ver pestaña Terceros).",
+            "Centro de Costo: opcional. Si se informa, debe coincidir con uno ya cargado.",
+            "Estado: opcional (si se deja vacío, queda como RECIBIDA). Valores válidos: "
+            "BORRADOR, APROBADA, RECIBIDA, ANULADA.",
+            "Producto/Servicio: obligatorio. Debe coincidir EXACTAMENTE con el Nombre de un "
+            "ítem ya cargado en Productos y Servicios. Si el ítem es de tipo COMPRADO_REVENTA, "
+            "la compra también ingresa la cantidad al kardex de inventario (costo promedio).",
+            "Cantidad: obligatoria, mayor a cero.",
+            "Precio Unitario: obligatorio, no puede ser negativo.",
+        ]),
+        ("Lo que no cubre esta plantilla", [
+            "No admite descuentos por línea: el sistema calcula el IVA y el total de cada "
+            "línea directo desde Cantidad x Precio Unitario.",
+            "No admite compra de insumos/materia prima (solo ítems del catálogo de "
+            "Productos y Servicios).",
+        ]),
+    ],
+}
+
+
+@app.route("/api/compras/plantilla-carga", methods=["GET"])
+def plantilla_compras():
+    contenido = carga_masiva.generar_plantilla(
+        "Compras", _COLUMNAS_PLANTILLA_COMPRAS, _EJEMPLO_COMPRAS, _INSTRUCTIVO_COMPRAS
+    )
+    return send_file(
+        contenido, as_attachment=True,
+        download_name="plantilla_compras.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def _fila_a_datos_compra(valores):
+    return {
+        "folio_oc": carga_masiva.valor_texto(valores, "Folio"),
+        "fecha_emision": carga_masiva.valor_texto(valores, "Fecha Emisión"),
+        "proveedor": carga_masiva.valor_texto(valores, "Proveedor"),
+        "centro_costo": carga_masiva.valor_texto(valores, "Centro de Costo"),
+        "estado_oc": carga_masiva.valor_texto(valores, "Estado") or "RECIBIDA",
+        "producto": carga_masiva.valor_texto(valores, "Producto/Servicio"),
+        "cantidad": carga_masiva.valor_numero(valores, "Cantidad"),
+        "precio_unitario": carga_masiva.valor_numero(valores, "Precio Unitario"),
+    }
+
+
+def _validar_fila_compra(conn, datos, vistos):
+    if datos["estado_oc"] not in ("BORRADOR", "APROBADA", "RECIBIDA", "ANULADA"):
+        return (f"Estado '{datos['estado_oc']}' inválido "
+                f"(debe ser BORRADOR, APROBADA, RECIBIDA o ANULADA)")
+    if datos["cantidad"] is None or datos["cantidad"] <= 0:
+        return "Cantidad debe ser un número mayor a cero"
+    if datos["precio_unitario"] is None or datos["precio_unitario"] < 0:
+        return "Precio Unitario debe ser un número no negativo"
+    try:
+        date.fromisoformat(str(datos["fecha_emision"])[:10])
+    except ValueError:
+        return f"Fecha Emisión '{datos['fecha_emision']}' no es una fecha válida (formato AAAA-MM-DD)"
+
+    id_centro_costo = None
+    if datos.get("centro_costo"):
+        if db.DB_ENGINE == "mssql":
+            cc = db.fetch_one_dict(conn, "SELECT id_centro_costo FROM tbl_centros_costo WHERE nombre_cc = ?", (datos["centro_costo"],))
+        else:
+            cc = db.fetch_one_dict(conn, "SELECT id_centro_costo FROM tbl_centros_costo WHERE nombre = ?", (datos["centro_costo"],))
+        if not cc:
+            return f"Centro de Costo '{datos['centro_costo']}' no existe"
+        id_centro_costo = cc["id_centro_costo"]
+    datos["_id_centro_costo"] = id_centro_costo
+
+    if db.DB_ENGINE == "mssql":
+        if not db.fetch_one_dict(conn, "SELECT 1 FROM map_clientes WHERE nombre_informal_excel = ?", (datos["proveedor"],)):
+            return f"Proveedor '{datos['proveedor']}' no está registrado en Terceros (como Proveedor)"
+        if not db.fetch_one_dict(conn, "SELECT 1 FROM map_productos WHERE descripcion_libre_excel = ?", (datos["producto"],)):
+            return f"Producto/Servicio '{datos['producto']}' no está registrado en Productos y Servicios"
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_ordenes_compra WHERE folio_oc = ?", (datos["folio_oc"],)):
+            if datos["folio_oc"] not in vistos.setdefault("folios_creados_en_este_archivo", set()):
+                return f"El folio '{datos['folio_oc']}' ya existe (no se pueden agregar líneas a una compra ya cargada)"
+    else:
+        tercero = db.fetch_one_dict(conn, "SELECT id_tercero FROM tbl_terceros WHERE razon_social = ?", (datos["proveedor"],))
+        if not tercero:
+            return f"Proveedor '{datos['proveedor']}' no está registrado en Terceros"
+        datos["_id_tercero"] = tercero["id_tercero"]
+        if db.fetch_one_dict(conn, "SELECT 1 FROM tbl_compras_gastos WHERE folio_documento = ?", (datos["folio_oc"],)):
+            return f"El folio '{datos['folio_oc']}' ya existe"
+
+    folios_vistos = vistos.setdefault("folios", {})
+    previo = folios_vistos.get(datos["folio_oc"])
+    if previo is None:
+        folios_vistos[datos["folio_oc"]] = {"proveedor": datos["proveedor"], "fecha_emision": datos["fecha_emision"]}
+        vistos.setdefault("folios_creados_en_este_archivo", set()).add(datos["folio_oc"])
+    else:
+        if previo["proveedor"] != datos["proveedor"]:
+            return f"El folio '{datos['folio_oc']}' ya tiene otro Proveedor en una fila anterior de este archivo"
+        if previo["fecha_emision"] != datos["fecha_emision"]:
+            return f"El folio '{datos['folio_oc']}' ya tiene otra Fecha Emisión en una fila anterior de este archivo"
+        if db.DB_ENGINE != "mssql":
+            return f"El folio '{datos['folio_oc']}' está repetido en más de una fila (en SQLite demo cada folio admite una sola línea)"
+    return None
+
+
+@app.route("/api/compras/carga-masiva", methods=["POST"])
+def carga_masiva_compras():
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return error("Debes adjuntar un archivo .xlsx")
+
+    estado_folios = {}
+
+    def registrar_fn(conn, datos):
+        if db.DB_ENGINE == "mssql":
+            id_asiento_actual = estado_folios.get(datos["folio_oc"])
+            nuevo_id_asiento = _ejecutar_linea_compra_mssql(
+                conn, datos["folio_oc"], datos["fecha_emision"],
+                datos["proveedor"], datos["producto"],
+                datos["cantidad"], datos["precio_unitario"],
+                datos["estado_oc"], datos.get("_id_centro_costo"),
+                id_asiento_actual,
+            )
+            estado_folios[datos["folio_oc"]] = nuevo_id_asiento
+            return
+
+        monto_neto = round(float(datos["cantidad"]) * float(datos["precio_unitario"]), 2)
+        monto_iva = round(monto_neto * IVA_RATE, 2)
+        monto_total = round(monto_neto + monto_iva, 2)
+        conn.execute(
+            """INSERT INTO tbl_compras_gastos
+               (folio_documento, id_tercero, id_centro_costo, fecha_emision,
+                descripcion, monto_neto, monto_iva, monto_total, estado_compra)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                datos["folio_oc"], datos["_id_tercero"], datos.get("_id_centro_costo"),
+                datos["fecha_emision"], datos["producto"], monto_neto, monto_iva, monto_total,
+                datos["estado_oc"],
+            ),
+        )
+
+    conn = db.get_conn()
+    try:
+        reporte = carga_masiva.procesar_carga(
+            archivo, _COLUMNAS_PLANTILLA_COMPRAS,
+            ["folio_oc", "fecha_emision", "proveedor", "producto", "cantidad", "precio_unitario"],
+            _fila_a_datos_compra, registrar_fn, conn, validar_fn=_validar_fila_compra,
+        )
+    finally:
+        conn.close()
+    return jsonify(reporte)
 
 
 # ---------------------------------------------------------------------------
@@ -1542,6 +1980,29 @@ def exportar_caja():
     )
 
 
+def _ejecutar_movimiento_caja_mssql(conn, fecha, tipo_flujo, monto, glosa,
+                                     codigo_cuenta_origen, codigo_cuenta_destino,
+                                     nombre_tercero, id_centro_costo):
+    """Ejecuta sp_procesar_movimiento_caja_externo para UN movimiento. NO
+    hace commit (ver _ejecutar_linea_venta_mssql para la explicación del
+    patrón). A diferencia de Ventas/Compras, un movimiento de Caja es
+    siempre independiente (no hay folio ni encadenado de asiento entre
+    filas), así que no hace falta devolver/recibir estado entre llamadas.
+    Devuelve el id_movimiento generado."""
+    cur = conn.execute(
+        """EXEC dbo.sp_procesar_movimiento_caja_externo
+               @fecha_movimiento = ?, @tipo_flujo = ?, @monto_absoluto = ?,
+               @glosa_movimiento = ?, @codigo_cuenta_origen = ?, @codigo_cuenta_destino = ?,
+               @nombre_informal_tercero = ?, @id_centro_costo = ?""",
+        (
+            fecha, tipo_flujo, float(monto), glosa, codigo_cuenta_origen,
+            codigo_cuenta_destino, nombre_tercero, id_centro_costo,
+        ),
+    )
+    fila = cur.fetchone()
+    return fila[0] if fila else None
+
+
 @app.route("/api/caja", methods=["POST"])
 def crear_movimiento_caja():
     payload = request.get_json(force=True)
@@ -1569,18 +2030,11 @@ def crear_movimiento_caja():
                     raise ValueError("Tercero no encontrado.")
                 nombre_tercero = tercero["razon_social"]
 
-            cur = conn.execute(
-                """EXEC dbo.sp_procesar_movimiento_caja_externo
-                       @fecha_movimiento = ?, @tipo_flujo = ?, @monto_absoluto = ?,
-                       @glosa_movimiento = ?, @codigo_cuenta_origen = ?, @codigo_cuenta_destino = ?,
-                       @nombre_informal_tercero = ?, @id_centro_costo = ?""",
-                (
-                    payload["fecha_movimiento"], payload["tipo_flujo"], float(payload["monto_absoluto"]),
-                    payload["glosa_movimiento"], payload["codigo_cuenta_origen"],
-                    payload.get("codigo_cuenta_destino"), nombre_tercero, payload.get("id_centro_costo"),
-                ),
+            id_movimiento = _ejecutar_movimiento_caja_mssql(
+                conn, payload["fecha_movimiento"], payload["tipo_flujo"], payload["monto_absoluto"],
+                payload["glosa_movimiento"], payload["codigo_cuenta_origen"],
+                payload.get("codigo_cuenta_destino"), nombre_tercero, payload.get("id_centro_costo"),
             )
-            fila = cur.fetchone()
             conn.commit()
         except Exception as exc:
             try:
@@ -1590,7 +2044,7 @@ def crear_movimiento_caja():
             conn.close()
             return error(f"No se pudo registrar el movimiento: {exc}")
         conn.close()
-        return jsonify({"id_movimiento": fila[0] if fila else None}), 201
+        return jsonify({"id_movimiento": id_movimiento}), 201
 
     conn = db.get_conn()
     try:
@@ -1614,6 +2068,177 @@ def crear_movimiento_caja():
         return error(f"No se pudo registrar el movimiento: {exc}")
     conn.close()
     return jsonify({"id_movimiento": new_id}), 201
+
+
+# --- Carga masiva de Caja (Fase 5) -----------------------------------------
+# A diferencia de Ventas/Compras, un movimiento de Caja es siempre una fila
+# independiente (no hay folio que agrupe varias filas en un documento), así
+# que esta carga reutiliza TAL CUAL el motor genérico de carga_masiva
+# (el mismo que usan los catálogos de Fase 4) -- no hace falta ningún
+# encadenado de estado entre filas.
+
+_COLUMNAS_PLANTILLA_CAJA = [
+    ("Fecha", "fecha_movimiento", None),
+    ("Tipo", "tipo_flujo", None),
+    ("Monto", "monto_absoluto", excel_export.FORMATO_MONEDA),
+    ("Glosa", "glosa_movimiento", None),
+    ("Cuenta Tesorería Origen", "codigo_cuenta_origen", None),
+    ("Cuenta Tesorería Destino", "codigo_cuenta_destino", None),
+    ("Tercero", "tercero", None),
+    ("Centro de Costo", "centro_costo", None),
+]
+_EJEMPLO_CAJA = {
+    "fecha_movimiento": "2026-11-01",
+    "tipo_flujo": "INGRESO",
+    "monto_absoluto": 10000,
+    "glosa_movimiento": "BORRAR ESTA FILA - EJEMPLO",
+    "codigo_cuenta_origen": "(código del plan de cuentas, ej. 1.1.01.002)",
+    "codigo_cuenta_destino": "(solo si Tipo = TRASPASO)",
+    "tercero": "(opcional)",
+    "centro_costo": "(opcional)",
+}
+_INSTRUCTIVO_CAJA = {
+    "titulo": "Instructivo de carga masiva — Movimientos de Caja",
+    "secciones": [
+        ("Antes de empezar", [
+            "Cada fila es un movimiento de Caja/Banco independiente (a diferencia de Ventas y "
+            "Compras, aquí no hay folio ni líneas: una fila = un movimiento).",
+            "La carga es TODO O NADA: si una sola fila tiene un error, no se carga ningún "
+            "movimiento del archivo. El reporte muestra todas las filas con error de una sola vez.",
+            "Borra la fila de ejemplo antes de cargar.",
+        ]),
+        ("Requisitos por columna", [
+            "Fecha: obligatoria, formato AAAA-MM-DD.",
+            "Tipo: obligatorio. Valores válidos: INGRESO, EGRESO, TRASPASO.",
+            "Monto: obligatorio, mayor a cero.",
+            "Glosa: obligatoria (descripción del movimiento).",
+            "Cuenta Tesorería Origen: obligatoria. Debe ser el código de una cuenta imputable "
+            "de Caja/Banco del plan de cuentas (ver pestaña Catálogos > Plan de Cuentas).",
+            "Cuenta Tesorería Destino: obligatoria SOLO si Tipo = TRASPASO (cuenta a la que "
+            "llega el dinero). Debe ser distinta de la cuenta de Origen.",
+            "Tercero: opcional (cliente o proveedor asociado al movimiento, ej. quién pagó o a "
+            "quién se le pagó). Si se informa, debe coincidir EXACTAMENTE con una Razón Social "
+            "ya cargada en Terceros.",
+            "Centro de Costo: opcional. Si se informa, debe coincidir con uno ya cargado.",
+        ]),
+    ],
+}
+
+
+@app.route("/api/caja/plantilla-carga", methods=["GET"])
+def plantilla_caja():
+    contenido = carga_masiva.generar_plantilla(
+        "Caja", _COLUMNAS_PLANTILLA_CAJA, _EJEMPLO_CAJA, _INSTRUCTIVO_CAJA
+    )
+    return send_file(
+        contenido, as_attachment=True,
+        download_name="plantilla_caja.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def _fila_a_datos_caja(valores):
+    return {
+        "fecha_movimiento": carga_masiva.valor_texto(valores, "Fecha"),
+        "tipo_flujo": carga_masiva.valor_texto(valores, "Tipo"),
+        "monto_absoluto": carga_masiva.valor_numero(valores, "Monto"),
+        "glosa_movimiento": carga_masiva.valor_texto(valores, "Glosa"),
+        "codigo_cuenta_origen": carga_masiva.valor_texto(valores, "Cuenta Tesorería Origen"),
+        "codigo_cuenta_destino": carga_masiva.valor_texto(valores, "Cuenta Tesorería Destino"),
+        "tercero": carga_masiva.valor_texto(valores, "Tercero"),
+        "centro_costo": carga_masiva.valor_texto(valores, "Centro de Costo"),
+    }
+
+
+def _validar_fila_caja(conn, datos, vistos):
+    if datos["tipo_flujo"] not in ("INGRESO", "EGRESO", "TRASPASO"):
+        return f"Tipo '{datos['tipo_flujo']}' inválido (debe ser INGRESO, EGRESO o TRASPASO)"
+    if datos["monto_absoluto"] is None or datos["monto_absoluto"] <= 0:
+        return "Monto debe ser un número mayor a cero"
+    try:
+        date.fromisoformat(str(datos["fecha_movimiento"])[:10])
+    except ValueError:
+        return f"Fecha '{datos['fecha_movimiento']}' no es una fecha válida (formato AAAA-MM-DD)"
+
+    id_centro_costo = None
+    if datos.get("centro_costo"):
+        if db.DB_ENGINE == "mssql":
+            cc = db.fetch_one_dict(conn, "SELECT id_centro_costo FROM tbl_centros_costo WHERE nombre_cc = ?", (datos["centro_costo"],))
+        else:
+            cc = db.fetch_one_dict(conn, "SELECT id_centro_costo FROM tbl_centros_costo WHERE nombre = ?", (datos["centro_costo"],))
+        if not cc:
+            return f"Centro de Costo '{datos['centro_costo']}' no existe"
+        id_centro_costo = cc["id_centro_costo"]
+    datos["_id_centro_costo"] = id_centro_costo
+
+    datos["_id_tercero"] = None
+    if datos.get("tercero"):
+        if db.DB_ENGINE == "mssql":
+            if not db.fetch_one_dict(conn, "SELECT 1 FROM map_clientes WHERE nombre_informal_excel = ?", (datos["tercero"],)):
+                return f"Tercero '{datos['tercero']}' no está registrado en Terceros"
+        else:
+            tercero = db.fetch_one_dict(conn, "SELECT id_tercero FROM tbl_terceros WHERE razon_social = ?", (datos["tercero"],))
+            if not tercero:
+                return f"Tercero '{datos['tercero']}' no está registrado en Terceros"
+            datos["_id_tercero"] = tercero["id_tercero"]
+
+    if db.DB_ENGINE == "mssql":
+        if not datos.get("codigo_cuenta_origen"):
+            return "Cuenta Tesorería Origen es obligatoria"
+        if not db.fetch_one_dict(
+            conn, "SELECT 1 FROM cat_plan_cuentas WHERE codigo_cuenta = ? AND es_imputable = 1",
+            (datos["codigo_cuenta_origen"],),
+        ):
+            return f"La cuenta de tesorería '{datos['codigo_cuenta_origen']}' no existe o no es imputable"
+        if datos["tipo_flujo"] == "TRASPASO":
+            if not datos.get("codigo_cuenta_destino"):
+                return "Un TRASPASO requiere informar la Cuenta Tesorería Destino"
+            if not db.fetch_one_dict(
+                conn, "SELECT 1 FROM cat_plan_cuentas WHERE codigo_cuenta = ? AND es_imputable = 1",
+                (datos["codigo_cuenta_destino"],),
+            ):
+                return f"La cuenta de tesorería destino '{datos['codigo_cuenta_destino']}' no existe o no es imputable"
+            if datos["codigo_cuenta_destino"] == datos["codigo_cuenta_origen"]:
+                return "La cuenta de Origen y Destino de un traspaso no pueden ser la misma"
+    return None
+
+
+def _registrar_fila_caja(conn, datos):
+    if db.DB_ENGINE == "mssql":
+        _ejecutar_movimiento_caja_mssql(
+            conn, datos["fecha_movimiento"], datos["tipo_flujo"], datos["monto_absoluto"],
+            datos["glosa_movimiento"], datos["codigo_cuenta_origen"], datos.get("codigo_cuenta_destino"),
+            datos.get("tercero"), datos.get("_id_centro_costo"),
+        )
+        return
+
+    conn.execute(
+        """INSERT INTO tbl_movimientos_caja
+           (fecha_movimiento, tipo_flujo, monto_absoluto, glosa_movimiento, id_tercero, id_centro_costo)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (
+            datos["fecha_movimiento"], datos["tipo_flujo"], datos["monto_absoluto"],
+            datos["glosa_movimiento"], datos.get("_id_tercero"), datos.get("_id_centro_costo"),
+        ),
+    )
+
+
+@app.route("/api/caja/carga-masiva", methods=["POST"])
+def carga_masiva_caja():
+    archivo = request.files.get("archivo")
+    if not archivo:
+        return error("Debes adjuntar un archivo .xlsx")
+
+    conn = db.get_conn()
+    try:
+        reporte = carga_masiva.procesar_carga(
+            archivo, _COLUMNAS_PLANTILLA_CAJA,
+            ["fecha_movimiento", "tipo_flujo", "monto_absoluto", "glosa_movimiento"],
+            _fila_a_datos_caja, _registrar_fila_caja, conn, validar_fn=_validar_fila_caja,
+        )
+    finally:
+        conn.close()
+    return jsonify(reporte)
 
 
 # ---------------------------------------------------------------------------

@@ -128,6 +128,16 @@
         <thead><tr><th>Folio</th><th>Cliente</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="carga-masiva" id="carga-masiva-ventas" data-modulo="ventas">
+        <h4>Carga masiva</h4>
+        <p class="hint">Descarga la plantilla, reemplaza la fila de ejemplo con tus datos (una fila por cada línea/ítem; repite el Folio si un documento tiene varios ítems) y vuelve a subir el mismo archivo.</p>
+        <a class="btn-export" href="/api/ventas/plantilla-carga" download>⬇ Descargar Plantilla</a>
+        <form class="form-carga-masiva">
+          <input type="file" accept=".xlsx" required>
+          <button type="submit">Cargar Excel</button>
+        </form>
+        <div class="reporte-carga"></div>
+      </div>
     </section>
 
     <!-- COMPRAS -->
@@ -179,6 +189,16 @@
         <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="carga-masiva" id="carga-masiva-compras" data-modulo="compras">
+        <h4>Carga masiva</h4>
+        <p class="hint">Descarga la plantilla, reemplaza la fila de ejemplo con tus datos (una fila por cada línea/ítem; repite el Folio si un documento tiene varios ítems) y vuelve a subir el mismo archivo.</p>
+        <a class="btn-export" href="/api/compras/plantilla-carga" download>⬇ Descargar Plantilla</a>
+        <form class="form-carga-masiva">
+          <input type="file" accept=".xlsx" required>
+          <button type="submit">Cargar Excel</button>
+        </form>
+        <div class="reporte-carga"></div>
+      </div>
     </section>
 
     <!-- CAJA -->
@@ -217,6 +237,16 @@
         <thead><tr><th>Fecha</th><th>Tipo</th><th>Cuenta</th><th>Monto</th><th>Glosa</th><th>Tercero</th><th>Centro costo</th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="carga-masiva" id="carga-masiva-caja" data-modulo="caja">
+        <h4>Carga masiva</h4>
+        <p class="hint">Descarga la plantilla, reemplaza la fila de ejemplo con tus datos (una fila por cada movimiento) y vuelve a subir el mismo archivo.</p>
+        <a class="btn-export" href="/api/caja/plantilla-carga" download>⬇ Descargar Plantilla</a>
+        <form class="form-carga-masiva">
+          <input type="file" accept=".xlsx" required>
+          <button type="submit">Cargar Excel</button>
+        </form>
+        <div class="reporte-carga"></div>
+      </div>
     </section>
 
     <!-- CATALOGOS -->

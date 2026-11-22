@@ -1058,6 +1058,9 @@ document.addEventListener("DOMContentLoaded", () => {
   initCargaMasiva("terceros", onCargaMasivaOk);
   initCargaMasiva("productos", onCargaMasivaOk);
   initCargaMasiva("centros_costo", onCargaMasivaOk);
+  initCargaMasiva("ventas", loadVentas);
+  initCargaMasiva("compras", loadCompras);
+  initCargaMasiva("caja", loadCaja);
 
   // Carga inicial (vista por defecto: dashboard)
   loadDashboard();
