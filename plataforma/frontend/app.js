@@ -764,6 +764,19 @@ function initFormProducto() {
   const boton = form.querySelector("button[type=submit]");
   boton.dataset.textoAlta = boton.textContent;
 
+  // El checkbox "Honorario real subcontratado" (Fase 6) solo tiene efecto
+  // real para ítems en modo SERVICIO (ver sp_procesar_venta_externa) -- se
+  // oculta para los demás modos para no confundir, y se desmarca al
+  // ocultarse para no enviar un valor "true" invisible por error.
+  const campoHonorario = document.getElementById("campo-honorario-clearing");
+  const checkHonorario = form.es_honorario_clearing;
+  const actualizarVisibilidadHonorario = () => {
+    const esServicio = form.modo_obtencion.value === "SERVICIO";
+    campoHonorario.style.display = esServicio ? "" : "none";
+    if (!esServicio) checkHonorario.checked = false;
+  };
+  form.modo_obtencion.addEventListener("change", actualizarVisibilidadHonorario);
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const payload = formToPayload(form);
@@ -781,6 +794,7 @@ function initFormProducto() {
       const btnCancelar = form.querySelector(".btn-cancelar-edicion");
       if (btnCancelar) btnCancelar.remove();
       form.reset();
+      actualizarVisibilidadHonorario();
       loadCatalogos();
       refreshCatalogCaches();
     } catch (err) {
@@ -800,6 +814,7 @@ function initFormProducto() {
       form.precio_venta_base.value = p.precio_venta_base || "";
       form.modo_obtencion.value = p.modo_obtencion || "";
       form.aplica_iva.checked = !(p.aplica_iva === false || p.aplica_iva === 0);
+      actualizarVisibilidadHonorario();
       form.es_honorario_clearing.checked = !!p.id_cuenta_clearing_compra;
       entrarModoEdicion(form, id, boton);
       form.scrollIntoView({ behavior: "smooth", block: "center" });
