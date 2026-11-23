@@ -314,12 +314,12 @@
             <input type="checkbox" name="aplica_iva" checked> Afecto a IVA
           </label>
           <label class="checkbox" id="campo-honorario-clearing" style="display:none">
-            <input type="checkbox" name="es_honorario_clearing"> Honorario real subcontratado (cancela pasivo 2125 al comprarlo)
+            <input type="checkbox" name="es_honorario_clearing"> Subcontrato — el pago real cancela la deuda estimada en "Honorarios Profesionales por Pagar" (cuenta 2125)
           </label>
           <button type="submit">Agregar producto</button>
           <span class="form-msg" id="msg-producto"></span>
         </form>
-        <p class="hint">Desmarcar "Afecto a IVA" para productos/servicios exentos (ej. algunos servicios de salud). La factura de exportación y otros tipos de documento aún no están modelados. Marca "Honorario real subcontratado" solo si este Servicio representa algo que le pagas a un tercero (contador, médico externo, etc.) y que ya aplicas a costo estándar en la Venta (ver Fase 6 / Hallazgo #21 del plan) — así la Compra real cancela el pasivo en vez de duplicar el gasto.</p>
+        <p class="hint">Desmarcar "Afecto a IVA" para productos/servicios exentos (ej. algunos servicios de salud). La factura de exportación y otros tipos de documento aún no están modelados. Al elegir "Servicio" se marca por defecto "Subcontrato": esto indica que el servicio lo presta un tercero externo y que, al venderlo, ya se contabiliza una deuda estimada en la cuenta 2125 "Honorarios Profesionales por Pagar" — así cuando registres la Compra real al subcontratista, se cancela esa deuda en vez de duplicar el gasto (ver Fase 6 / Hallazgo #21 del plan). Desmárcala si el servicio lo presta personal interno de la empresa.</p>
         <div class="tabla-toolbar">
           <input type="search" class="buscar-tabla" id="buscar-productos" placeholder="Buscar por SKU, nombre...">
           <div class="acciones-masivas" data-modulo="productos">

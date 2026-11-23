@@ -764,16 +764,22 @@ function initFormProducto() {
   const boton = form.querySelector("button[type=submit]");
   boton.dataset.textoAlta = boton.textContent;
 
-  // El checkbox "Honorario real subcontratado" (Fase 6) solo tiene efecto
-  // real para ítems en modo SERVICIO (ver sp_procesar_venta_externa) -- se
-  // oculta para los demás modos para no confundir, y se desmarca al
-  // ocultarse para no enviar un valor "true" invisible por error.
+  // El checkbox "Subcontrato" (Fase 6) solo tiene efecto real para ítems en
+  // modo SERVICIO (ver sp_procesar_venta_externa) -- se oculta para los
+  // demás modos para no confundir, y se desmarca al ocultarse para no
+  // enviar un valor "true" invisible por error. Al elegir Servicio se marca
+  // por defecto (caso más común: servicio prestado por un tercero), pero
+  // sigue siendo desmarcable a mano para servicios con personal interno.
   const campoHonorario = document.getElementById("campo-honorario-clearing");
   const checkHonorario = form.es_honorario_clearing;
   const actualizarVisibilidadHonorario = () => {
     const esServicio = form.modo_obtencion.value === "SERVICIO";
     campoHonorario.style.display = esServicio ? "" : "none";
-    if (!esServicio) checkHonorario.checked = false;
+    if (esServicio) {
+      checkHonorario.checked = true;
+    } else {
+      checkHonorario.checked = false;
+    }
   };
   form.modo_obtencion.addEventListener("change", actualizarVisibilidadHonorario);
 
