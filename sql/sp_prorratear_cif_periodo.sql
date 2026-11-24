@@ -22,7 +22,7 @@
 -- con la contra-cuenta 5.2.02.001 "CIF Absorbido".
 --
 -- BASE DE PRORRATEO (v10): Costo Directo Total = MOD a costo ESTÁNDAR
--- (tbl_item_composicion_hh × cat_perfiles_hh -- la mano de obra no pasa
+-- (tbl_item_composicion_recursos × cat_recursos_costeo_estandar -- la mano de obra no pasa
 -- por kardex, no hay una fuente "real" distinta) + MPD a costo REAL ya
 -- consumido del kardex (desde v7: SUM de las salidas de
 -- dbo.tbl_movimientos_inventario para esa venta, en vez del costo
@@ -92,10 +92,10 @@ BEGIN
                 FROM (
                     SELECT
                         -- MOD: costo estándar (BOM) -- no hay kardex de mano de obra
-                        vd.cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                               FROM dbo.tbl_item_composicion_hh hh
-                                               INNER JOIN dbo.cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                               WHERE hh.id_item = vd.id_item), 0)
+                        vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                               FROM dbo.tbl_item_composicion_recursos cr
+                                               INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                               WHERE cr.id_item = vd.id_item), 0)
                         -- MPD (v10): costo REAL ya consumido del kardex de insumos
                         + ISNULL((SELECT SUM(mi.costo_unitario_movimiento * mi.cantidad)
                                   FROM dbo.tbl_movimientos_inventario mi
@@ -128,10 +128,10 @@ BEGIN
                     DECLARE cur_lineas CURSOR LOCAL FAST_FORWARD FOR
                         SELECT vd.id_venta_detalle, vd.id_item, vv.folio_factura, vv.fecha_emision,
                                -- MOD: costo estándar (BOM); MPD (v10): costo REAL de kardex -- ver nota arriba
-                               vd.cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                                      FROM dbo.tbl_item_composicion_hh hh
-                                                      INNER JOIN dbo.cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                                      WHERE hh.id_item = vd.id_item), 0)
+                               vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                                      FROM dbo.tbl_item_composicion_recursos cr
+                                                      INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                                      WHERE cr.id_item = vd.id_item), 0)
                                + ISNULL((SELECT SUM(mi.costo_unitario_movimiento * mi.cantidad)
                                          FROM dbo.tbl_movimientos_inventario mi
                                          WHERE mi.origen_documento = 'VENTA'

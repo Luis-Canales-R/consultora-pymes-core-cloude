@@ -382,30 +382,44 @@ BEGIN
                 --   COMPRADO_REVENTA -> sale del kardex (CPP) vía
                 --     sp_registrar_movimiento_inventario; Debe Costo/Gasto
                 --     del ítem (fallback 5111) / Haber Inventario (1141).
-                --   FABRICADO -> MOD (tbl_item_composicion_hh, a costo
+                --   FABRICADO -> MOD (tbl_item_composicion_recursos, a costo
                 --     estándar/referencia, pues la mano de obra no se
                 --     inventaría) + MPD (v7: ya NO a costo estándar; se
                 --     consume ítem por ítem desde el kardex REAL de insumos
                 --     vía sp_registrar_movimiento_inventario, igual mecánica
                 --     que COMPRADO_REVENTA); Debe Costo/Gasto del ítem
                 --     (fallback 5111) / Haber Remuneraciones por Pagar
-                --     (2131, porción MOD estándar) y Haber Materia Prima
-                --     Aplicada a Producción por Regularizar (2123, porción
-                --     MPD a costo REAL de kardex).
-                --   SERVICIO (v6) -> Honorarios (tbl_item_composicion_hh, a
-                --     costo estándar) + Insumos (v7: a costo REAL de kardex,
+                --     (2131, porción MOD interna) + Haber Honorarios
+                --     Profesionales por Pagar (2125, porción MOD
+                --     subcontratada -- v8) y Haber Materia Prima Aplicada a
+                --     Producción por Regularizar (2123, porción MPD a costo
+                --     REAL de kardex).
+                --   SERVICIO (v6) -> Honorarios (tbl_item_composicion_recursos,
+                --     a costo estándar) + Insumos (v7: a costo REAL de kardex,
                 --     misma mecánica que FABRICADO); Debe Costo/Gasto del
                 --     ítem (fallback 5113 Honorarios/Servicios Subcontratados)
                 --     / Haber Honorarios Profesionales por Pagar (2125,
-                --     porción honorarios estándar) y Haber Insumos Aplicados
-                --     a Servicios por Regularizar (2124, porción insumos a
-                --     costo REAL). No aplica CIF (es exclusivo de producción).
+                --     componentes subcontratados) + Haber Remuneraciones por
+                --     Pagar (2131, componentes de personal interno -- v8) y
+                --     Haber Insumos Aplicados a Servicios por Regularizar
+                --     (2124, porción insumos a costo REAL). No aplica CIF
+                --     (es exclusivo de producción).
                 --   NULL (ítem sin clasificar) -> sin leg de costo.
                 --
                 -- v7 NOTA OPERACIONAL: al consumirse desde el kardex real, una
                 -- venta FABRICADO/SERVICIO fallará con "stock insuficiente" si
                 -- los insumos de su BOM no fueron comprados (ingresados a
                 -- kardex) en cantidad suficiente antes de la venta.
+                --
+                -- v8 (BOM generalizado a Bill of Resources, Tarea #50): el
+                -- BOM de horas-hombre se generalizó a cat_recursos_costeo_
+                -- estandar / tbl_item_composicion_recursos (sql/generalizar_
+                -- bom_recursos_costeo.sql), con unidad de medida libre y un
+                -- origen por recurso ('INTERNO' / 'SUBCONTRATADO'). El costo
+                -- estándar se reparte ahora por origen dentro de la misma
+                -- línea de venta -- ver sp_procesar_transaccion_externa.sql
+                -- para el detalle completo de este cambio (misma lógica,
+                -- replicada aquí set-based para el ETL de staging).
                 ---------------------------------------------------
 
                 -- COMPRADO_REVENTA: salida de kardex ítem por ítem (el CPP
@@ -448,16 +462,23 @@ BEGIN
 
                 -- FABRICADO: MOD a costo estándar (BOM), agregado por cuenta
                 -- de costo resuelta (no requiere kardex, es aritmética pura
-                -- sobre tbl_item_composicion_hh). La MPD (insumos) se resuelve
-                -- más abajo desde el kardex real (v7).
-                DECLARE @fab_costos TABLE (mod_linea DECIMAL(18,2), id_cuenta_costo_resuelta INT);
+                -- sobre tbl_item_composicion_recursos). La MPD (insumos) se
+                -- resuelve más abajo desde el kardex real (v7).
+                -- v8 (BOM generalizado, Tarea #50): mod_interno/mod_subcontratado
+                -- en vez de un solo mod_linea, para separar por origen del
+                -- recurso dentro de la misma línea de venta.
+                DECLARE @fab_costos TABLE (mod_interno DECIMAL(18,2), mod_subcontratado DECIMAL(18,2), id_cuenta_costo_resuelta INT);
 
-                INSERT INTO @fab_costos (mod_linea, id_cuenta_costo_resuelta)
+                INSERT INTO @fab_costos (mod_interno, mod_subcontratado, id_cuenta_costo_resuelta)
                 SELECT
-                    vd.cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                           FROM dbo.tbl_item_composicion_hh hh
-                                           INNER JOIN dbo.cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                           WHERE hh.id_item = vd.id_item), 0),
+                    vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                           FROM dbo.tbl_item_composicion_recursos cr
+                                           INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                           WHERE cr.id_item = vd.id_item AND rc.origen = 'INTERNO'), 0),
+                    vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                           FROM dbo.tbl_item_composicion_recursos cr
+                                           INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                           WHERE cr.id_item = vd.id_item AND rc.origen = 'SUBCONTRATADO'), 0),
                     ISNULL(ps.id_cuenta_costo_gasto, 5111)
                 FROM dbo.tbl_ventas_detalle vd
                 INNER JOIN dbo.tbl_productos_servicios ps ON ps.id_item = vd.id_item
@@ -467,14 +488,20 @@ BEGIN
                 -- SERVICIO (v6): Honorarios a costo estándar (BOM), misma
                 -- mecánica que el MOD de FABRICADO. Los Insumos se resuelven
                 -- más abajo desde el kardex real (v7).
-                DECLARE @serv_costos TABLE (honorarios_linea DECIMAL(18,2), id_cuenta_costo_resuelta INT);
+                -- v8 (BOM generalizado, Tarea #50): honorarios_interno/
+                -- honorarios_subcontratado en vez de un solo honorarios_linea.
+                DECLARE @serv_costos TABLE (honorarios_interno DECIMAL(18,2), honorarios_subcontratado DECIMAL(18,2), id_cuenta_costo_resuelta INT);
 
-                INSERT INTO @serv_costos (honorarios_linea, id_cuenta_costo_resuelta)
+                INSERT INTO @serv_costos (honorarios_interno, honorarios_subcontratado, id_cuenta_costo_resuelta)
                 SELECT
-                    vd.cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                           FROM dbo.tbl_item_composicion_hh hh
-                                           INNER JOIN dbo.cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                           WHERE hh.id_item = vd.id_item), 0),
+                    vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                           FROM dbo.tbl_item_composicion_recursos cr
+                                           INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                           WHERE cr.id_item = vd.id_item AND rc.origen = 'INTERNO'), 0),
+                    vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                           FROM dbo.tbl_item_composicion_recursos cr
+                                           INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                           WHERE cr.id_item = vd.id_item AND rc.origen = 'SUBCONTRATADO'), 0),
                     ISNULL(ps.id_cuenta_costo_gasto, 5113)
                 FROM dbo.tbl_ventas_detalle vd
                 INNER JOIN dbo.tbl_productos_servicios ps ON ps.id_item = vd.id_item
@@ -520,21 +547,28 @@ BEGIN
                 DEALLOCATE cur_insumos_produccion_servicio;
 
                 -- FABRICADO: Debe Costo (MOD estándar + MPD real) / Haber
-                -- Remuneraciones por Pagar (2131, MOD) + Haber Materia Prima
-                -- Aplicada por Regularizar (2123, MPD a costo real kardex).
+                -- Remuneraciones por Pagar (2131, MOD interna) + Haber
+                -- Honorarios Profesionales por Pagar (2125, MOD subcontratada
+                -- -- v8) + Haber Materia Prima Aplicada por Regularizar
+                -- (2123, MPD a costo real kardex).
                 INSERT INTO @lineas_venta (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
                 SELECT d.id_cuenta_costo_resuelta, SUM(d.monto), 0.00, @v_cc, 'Costo Directo Producción (MOD+MPD real) Venta ' + @folio_actual
                 FROM (
-                    SELECT id_cuenta_costo_resuelta, mod_linea AS monto FROM @fab_costos
+                    SELECT id_cuenta_costo_resuelta, (mod_interno + mod_subcontratado) AS monto FROM @fab_costos
                     UNION ALL
                     SELECT id_cuenta_costo_resuelta, monto_real FROM @mpd_insumos_real WHERE modo_obtencion = 'FABRICADO'
                 ) d
                 GROUP BY d.id_cuenta_costo_resuelta
                 HAVING SUM(d.monto) > 0;
 
-                IF EXISTS (SELECT 1 FROM @fab_costos HAVING SUM(mod_linea) > 0)
+                IF EXISTS (SELECT 1 FROM @fab_costos HAVING SUM(mod_interno) > 0)
                     INSERT INTO @lineas_venta (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                    SELECT 2131, 0.00, SUM(mod_linea), @v_cc, 'Remuneraciones por Pagar (MOD) Venta ' + @folio_actual
+                    SELECT 2131, 0.00, SUM(mod_interno), @v_cc, 'Remuneraciones por Pagar (MOD Interna) Venta ' + @folio_actual
+                    FROM @fab_costos;
+
+                IF EXISTS (SELECT 1 FROM @fab_costos HAVING SUM(mod_subcontratado) > 0)
+                    INSERT INTO @lineas_venta (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
+                    SELECT 2125, 0.00, SUM(mod_subcontratado), @v_cc, 'Honorarios Profesionales por Pagar (MOD Subcontratada) Venta ' + @folio_actual
                     FROM @fab_costos;
 
                 IF EXISTS (SELECT 1 FROM @mpd_insumos_real WHERE modo_obtencion = 'FABRICADO')
@@ -543,22 +577,29 @@ BEGIN
                     FROM @mpd_insumos_real WHERE modo_obtencion = 'FABRICADO';
 
                 -- SERVICIO (v6/v7): Debe Costo (Honorarios estándar + Insumos
-                -- real) / Haber Honorarios Profesionales por Pagar (2125) +
+                -- real) / Haber Honorarios Profesionales por Pagar (2125,
+                -- componentes subcontratados) + Haber Remuneraciones por
+                -- Pagar (2131, componentes de personal interno -- v8) +
                 -- Haber Insumos Aplicados a Servicios por Regularizar (2124,
                 -- a costo real kardex). No aplica CIF (exclusivo de producción).
                 INSERT INTO @lineas_venta (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
                 SELECT d.id_cuenta_costo_resuelta, SUM(d.monto), 0.00, @v_cc, 'Costo Directo Servicio (Honorarios+Insumos real) Venta ' + @folio_actual
                 FROM (
-                    SELECT id_cuenta_costo_resuelta, honorarios_linea AS monto FROM @serv_costos
+                    SELECT id_cuenta_costo_resuelta, (honorarios_interno + honorarios_subcontratado) AS monto FROM @serv_costos
                     UNION ALL
                     SELECT id_cuenta_costo_resuelta, monto_real FROM @mpd_insumos_real WHERE modo_obtencion = 'SERVICIO'
                 ) d
                 GROUP BY d.id_cuenta_costo_resuelta
                 HAVING SUM(d.monto) > 0;
 
-                IF EXISTS (SELECT 1 FROM @serv_costos HAVING SUM(honorarios_linea) > 0)
+                IF EXISTS (SELECT 1 FROM @serv_costos HAVING SUM(honorarios_subcontratado) > 0)
                     INSERT INTO @lineas_venta (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                    SELECT 2125, 0.00, SUM(honorarios_linea), @v_cc, 'Honorarios Profesionales por Pagar Venta ' + @folio_actual
+                    SELECT 2125, 0.00, SUM(honorarios_subcontratado), @v_cc, 'Honorarios Profesionales por Pagar Venta ' + @folio_actual
+                    FROM @serv_costos;
+
+                IF EXISTS (SELECT 1 FROM @serv_costos HAVING SUM(honorarios_interno) > 0)
+                    INSERT INTO @lineas_venta (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
+                    SELECT 2131, 0.00, SUM(honorarios_interno), @v_cc, 'Remuneraciones por Pagar (Personal Interno en Servicio) Venta ' + @folio_actual
                     FROM @serv_costos;
 
                 IF EXISTS (SELECT 1 FROM @mpd_insumos_real WHERE modo_obtencion = 'SERVICIO')

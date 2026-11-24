@@ -34,17 +34,20 @@ GO
 --   COMPRADO_REVENTA -> sale del kardex (CPP) vía sp_registrar_movimiento_
 --     inventario; Debe Costo/Gasto del ítem (fallback 5111) / Haber
 --     Inventario (1141).
---   FABRICADO -> MOD (tbl_item_composicion_hh, costo estándar) + MPD
+--   FABRICADO -> MOD (tbl_item_composicion_recursos, costo estándar) + MPD
 --     (v7: consumida componente por componente desde el kardex REAL de
 --     insumos, igual mecánica que COMPRADO_REVENTA); Debe Costo/Gasto del
 --     ítem (fallback 5111) / Haber Remuneraciones por Pagar (2131, MOD
---     estándar) y Haber Materia Prima Aplicada a Producción por
+--     interna) + Haber Honorarios Profesionales por Pagar (2125, MOD
+--     subcontratada -- v8) y Haber Materia Prima Aplicada a Producción por
 --     Regularizar (2123, MPD a costo REAL).
---   SERVICIO (v6) -> Honorarios (tbl_item_composicion_hh, costo estándar)
---     + Insumos (v7: a costo REAL de kardex, misma mecánica que
+--   SERVICIO (v6) -> Honorarios (tbl_item_composicion_recursos, costo
+--     estándar) + Insumos (v7: a costo REAL de kardex, misma mecánica que
 --     FABRICADO); Debe Costo/Gasto del ítem (fallback 5113 Honorarios/
 --     Servicios Subcontratados) / Haber Honorarios Profesionales por
---     Pagar (2125) y Haber Insumos Aplicados a Servicios por Regularizar
+--     Pagar (2125, componentes subcontratados -- v8) + Haber Remuneraciones
+--     por Pagar (2131, componentes de personal interno dentro del mismo
+--     ítem -- v8) y Haber Insumos Aplicados a Servicios por Regularizar
 --     (2124, a costo REAL). No aplica CIF.
 --   NULL (ítem sin clasificar) -> sin leg de costo.
 --
@@ -53,6 +56,20 @@ GO
 -- kardex real de insumos (tbl_movimientos_inventario, rama @id_insumo),
 -- por lo que esta venta puntual fallará con "stock insuficiente" si los
 -- insumos del BOM no fueron comprados (ingresados a kardex) previamente.
+--
+-- CAMBIO v8 (BOM generalizado a Bill of Resources, Tarea #50): el BOM de
+-- horas-hombre (cat_perfiles_hh / tbl_item_composicion_hh) se generalizó a
+-- cat_recursos_costeo_estandar / tbl_item_composicion_recursos (sql/
+-- generalizar_bom_recursos_costeo.sql), agregando unidad de medida libre
+-- (ya no solo horas) y un ORIGEN por recurso ('INTERNO' / 'SUBCONTRATADO').
+-- El costo estándar de FABRICADO y SERVICIO ahora se reparte por origen
+-- DENTRO de la misma línea de venta, en vez de asumir que el ítem completo
+-- es 100% de un solo origen -- resuelve la limitación documentada en
+-- Hallazgo #23 (mezcla de personal interno + subcontratistas en el mismo
+-- ítem/SKU, y servicios subcontratados no medidos en horas, ej. m², ml,
+-- unidad). El checkbox "Subcontrato" a nivel de ítem queda obsoleto como
+-- mecanismo de verdad: la granularidad correcta vive ahora en cada línea
+-- del BOM, vía el origen de cada recurso.
 -- ======================================================================
 CREATE OR ALTER PROCEDURE sp_procesar_venta_externa
     @folio_factura VARCHAR(50),
@@ -93,9 +110,17 @@ BEGIN
     DECLARE @costo_unitario_cpp DECIMAL(18,4);
     DECLARE @glosa_tmp VARCHAR(250);  -- buffer para armar glosas concatenadas antes de pasarlas a EXEC
     DECLARE @periodo_tmp VARCHAR(7);  -- buffer para CONVERT(...) antes de pasarlo a EXEC
-    DECLARE @mod_linea DECIMAL(18,2);
+    -- v8 (BOM generalizado a Bill of Resources, Tarea #50): mod_linea/
+    -- honorarios_linea se reemplazan por un par interno/subcontratado cada
+    -- uno, para poder repartir el costo del BOM dentro de la MISMA línea
+    -- de venta según el origen de cada recurso (cat_recursos_costeo_
+    -- estandar.origen), en vez de asumir que todo el ítem es 100% de un
+    -- solo origen.
+    DECLARE @mod_interno DECIMAL(18,2);
+    DECLARE @mod_subcontratado DECIMAL(18,2);
     DECLARE @mpd_linea DECIMAL(18,2);
-    DECLARE @honorarios_linea DECIMAL(18,2);
+    DECLARE @honorarios_interno DECIMAL(18,2);
+    DECLARE @honorarios_subcontratado DECIMAL(18,2);
     DECLARE @insumos_linea DECIMAL(18,2);
     -- v7 (Kardex Real de Insumos)
     DECLARE @ins_id_insumo INT, @ins_cantidad_total DECIMAL(18,4), @ins_cpp_salida DECIMAL(18,4);
@@ -242,11 +267,19 @@ BEGIN
             END
             ELSE IF @modo_obtencion = 'FABRICADO'
             BEGIN
-                -- MOD a costo estándar de referencia (la mano de obra no se inventaría)
-                SELECT @mod_linea = @cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                                         FROM tbl_item_composicion_hh hh
-                                                         INNER JOIN cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                                         WHERE hh.id_item = @id_item_oficial), 0);
+                -- v8: MOD a costo estándar de referencia (la mano de obra no
+                -- se inventaría), repartido por origen del recurso -- interno
+                -- (personal propio, credita 2131 como siempre) vs.
+                -- subcontratado (un paso de fabricación tercerizado, credita
+                -- 2125, igual mecánica de clearing que Honorarios en SERVICIO).
+                SELECT @mod_interno = @cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                                           FROM tbl_item_composicion_recursos cr
+                                                           INNER JOIN cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                                           WHERE cr.id_item = @id_item_oficial AND rc.origen = 'INTERNO'), 0);
+                SELECT @mod_subcontratado = @cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                                                 FROM tbl_item_composicion_recursos cr
+                                                                 INNER JOIN cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                                                 WHERE cr.id_item = @id_item_oficial AND rc.origen = 'SUBCONTRATADO'), 0);
 
                 -- v7 (Kardex Real de Insumos): MPD ya NO es costo estándar;
                 -- se consume componente por componente del BOM desde el
@@ -278,13 +311,17 @@ BEGIN
                 CLOSE cur_mpd_fabricado;
                 DEALLOCATE cur_mpd_fabricado;
 
-                IF (@mod_linea + @mpd_linea) > 0
+                IF (@mod_interno + @mod_subcontratado + @mpd_linea) > 0
                     INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                    VALUES (@id_cuenta_costo_gasto, ROUND(@mod_linea + @mpd_linea, 2), 0.00, @id_centro_costo, 'Costo Directo Producción (MOD+MPD real) Venta ' + @folio_factura);
+                    VALUES (@id_cuenta_costo_gasto, ROUND(@mod_interno + @mod_subcontratado + @mpd_linea, 2), 0.00, @id_centro_costo, 'Costo Directo Producción (MOD+MPD real) Venta ' + @folio_factura);
 
-                IF @mod_linea > 0
+                IF @mod_interno > 0
                     INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                    VALUES (2131, 0.00, ROUND(@mod_linea, 2), @id_centro_costo, 'Remuneraciones por Pagar (MOD) Venta ' + @folio_factura);
+                    VALUES (2131, 0.00, ROUND(@mod_interno, 2), @id_centro_costo, 'Remuneraciones por Pagar (MOD Interna) Venta ' + @folio_factura);
+
+                IF @mod_subcontratado > 0
+                    INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
+                    VALUES (2125, 0.00, ROUND(@mod_subcontratado, 2), @id_centro_costo, 'Honorarios Profesionales por Pagar (MOD Subcontratada) Venta ' + @folio_factura);
 
                 IF @mpd_linea > 0
                     INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
@@ -294,10 +331,19 @@ BEGIN
             BEGIN
                 -- v6 (Costeo Directo de Servicios): Honorarios a costo
                 -- estándar (BOM), misma mecánica que el MOD de FABRICADO.
-                SELECT @honorarios_linea = @cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                                                FROM tbl_item_composicion_hh hh
-                                                                INNER JOIN cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                                                WHERE hh.id_item = @id_item_oficial), 0);
+                -- v8 (BOM generalizado, Tarea #50): repartido por origen del
+                -- recurso -- ya no se asume que el ítem completo es 100%
+                -- subcontratado. Esto reemplaza al checkbox "Subcontrato" a
+                -- nivel de ítem (Hallazgo #23) como mecanismo de verdad: la
+                -- granularidad correcta vive en cada línea del BOM.
+                SELECT @honorarios_interno = @cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                                                  FROM tbl_item_composicion_recursos cr
+                                                                  INNER JOIN cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                                                  WHERE cr.id_item = @id_item_oficial AND rc.origen = 'INTERNO'), 0);
+                SELECT @honorarios_subcontratado = @cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                                                        FROM tbl_item_composicion_recursos cr
+                                                                        INNER JOIN cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                                                        WHERE cr.id_item = @id_item_oficial AND rc.origen = 'SUBCONTRATADO'), 0);
 
                 -- v7 (Kardex Real de Insumos): Insumos ya NO es costo
                 -- estándar; se consume componente por componente del BOM
@@ -329,13 +375,17 @@ BEGIN
                 CLOSE cur_insumos_servicio;
                 DEALLOCATE cur_insumos_servicio;
 
-                IF (@honorarios_linea + @insumos_linea) > 0
+                IF (@honorarios_interno + @honorarios_subcontratado + @insumos_linea) > 0
                     INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                    VALUES (ISNULL(@id_cuenta_costo_gasto_raw, 5113), ROUND(@honorarios_linea + @insumos_linea, 2), 0.00, @id_centro_costo, 'Costo Directo Servicio (Honorarios+Insumos real) Venta ' + @folio_factura);
+                    VALUES (ISNULL(@id_cuenta_costo_gasto_raw, 5113), ROUND(@honorarios_interno + @honorarios_subcontratado + @insumos_linea, 2), 0.00, @id_centro_costo, 'Costo Directo Servicio (Honorarios+Insumos real) Venta ' + @folio_factura);
 
-                IF @honorarios_linea > 0
+                IF @honorarios_subcontratado > 0
                     INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
-                    VALUES (2125, 0.00, ROUND(@honorarios_linea, 2), @id_centro_costo, 'Honorarios Profesionales por Pagar Venta ' + @folio_factura);
+                    VALUES (2125, 0.00, ROUND(@honorarios_subcontratado, 2), @id_centro_costo, 'Honorarios Profesionales por Pagar Venta ' + @folio_factura);
+
+                IF @honorarios_interno > 0
+                    INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)
+                    VALUES (2131, 0.00, ROUND(@honorarios_interno, 2), @id_centro_costo, 'Remuneraciones por Pagar (Personal Interno en Servicio) Venta ' + @folio_factura);
 
                 IF @insumos_linea > 0
                     INSERT INTO @lineas_venta_externa (id_cuenta, debe, haber, id_centro_costo, glosa_detalle)

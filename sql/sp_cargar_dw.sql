@@ -429,10 +429,10 @@ BEGIN
                               AND mi.id_item = vd.id_item), 0)
                 WHEN di.modo_obtencion IN ('FABRICADO', 'SERVICIO') THEN
                     -- MOD/Honorarios: costo estándar (BOM)
-                    vd.cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                           FROM dbo.tbl_item_composicion_hh hh
-                                           INNER JOIN dbo.cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                           WHERE hh.id_item = vd.id_item), 0)
+                    vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                           FROM dbo.tbl_item_composicion_recursos cr
+                                           INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                           WHERE cr.id_item = vd.id_item), 0)
                     -- MPD/Insumos (v7): costo REAL ya consumido del kardex
                     + ISNULL((SELECT SUM(mi.costo_unitario_movimiento * mi.cantidad)
                               FROM dbo.tbl_movimientos_inventario mi
@@ -601,10 +601,10 @@ BEGIN
                               AND mi.id_referencia = vv.id_venta_devengada
                               AND mi.id_item = vd.id_item), 0)
                 WHEN di.modo_obtencion IN ('FABRICADO', 'SERVICIO') THEN
-                    vd.cantidad * ISNULL((SELECT SUM(hh.cantidad_horas * ph.costo_hora_referencia)
-                                           FROM dbo.tbl_item_composicion_hh hh
-                                           INNER JOIN dbo.cat_perfiles_hh ph ON ph.id_perfil_hh = hh.id_perfil_hh
-                                           WHERE hh.id_item = vd.id_item), 0)
+                    vd.cantidad * ISNULL((SELECT SUM(cr.cantidad * rc.costo_unitario_referencia)
+                                           FROM dbo.tbl_item_composicion_recursos cr
+                                           INNER JOIN dbo.cat_recursos_costeo_estandar rc ON rc.id_recurso = cr.id_recurso
+                                           WHERE cr.id_item = vd.id_item), 0)
                     + ISNULL((SELECT SUM(mi.costo_unitario_movimiento * mi.cantidad)
                               FROM dbo.tbl_movimientos_inventario mi
                               WHERE mi.origen_documento = 'VENTA'
