@@ -1950,6 +1950,28 @@ def listar_cuentas_tesoreria():
     return jsonify([{"codigo_cuenta": "CAJA-DEMO", "nombre_cuenta": "Caja / Banco (modo demo SQLite)"}])
 
 
+@app.route("/api/catalogos/plan-cuentas", methods=["GET"])
+def listar_plan_cuentas():
+    """Plan de cuentas completo (cuentas imputables), para el selector
+    manual de cuenta contable en un movimiento de Caja sin Venta/Compra
+    asociada (aporte de capital, préstamo recibido, reembolso contra
+    boleta -- Flujo de Caja Proyectado, ver Hallazgo correspondiente).
+    Solo tiene sentido en modo mssql (el esquema sqlite/demo no tiene un
+    plan de cuentas real)."""
+    if db.DB_ENGINE != "mssql":
+        return jsonify([])
+    conn = db.get_conn()
+    rows = db.fetch_dicts(
+        conn,
+        """SELECT id_cuenta, codigo_cuenta, nombre_cuenta, tipo_cuenta
+           FROM cat_plan_cuentas
+           WHERE es_imputable = 1
+           ORDER BY codigo_cuenta""",
+    )
+    conn.close()
+    return jsonify(rows)
+
+
 def _obtener_caja(limite=None):
     """Factorizado para que lo use tanto el endpoint JSON (listar_caja,
     con el límite de 200 que ya tenía la UI) como el de exportación (sin
@@ -2064,6 +2086,15 @@ def crear_movimiento_caja():
                 payload["glosa_movimiento"], payload["codigo_cuenta_origen"],
                 payload.get("codigo_cuenta_destino"), nombre_tercero, payload.get("id_centro_costo"),
             )
+            # Flujo de Caja Proyectado: cuenta contable manual, solo para
+            # movimientos que NO van a vincularse a una Venta/Compra (ej.
+            # aporte de capital, préstamo recibido, reembolso contra
+            # boleta) -- ver sql/flujo_caja_cuenta_manual_movimiento.sql.
+            if payload.get("id_cuenta_contable"):
+                conn.execute(
+                    "UPDATE tbl_movimientos_caja SET id_cuenta_contable = ? WHERE id_movimiento = ?",
+                    (payload["id_cuenta_contable"], id_movimiento),
+                )
             conn.commit()
         except Exception as exc:
             try:
@@ -2336,13 +2367,43 @@ def desactivar_aplicacion_pago(id_aplicacion):
     return jsonify({"ok": True})
 
 
-# --- Flujo de Caja Proyectado -- Reporte (diaria/mensual/anual) -----------
-# Se apoya en vw_flujo_caja_movimientos (sql/flujo_caja_fase_reporte.sql):
-# una fila por evento de caja, real (ya ocurrido) o proyectado (saldo
-# pendiente de una venta/compra en su fecha de vencimiento; si ya venció se
-# reubica en HOY con origen PROYECTADO_VENCIDO). Consolidado entre todas
-# las cuentas bancarias -- los traspasos entre cuentas propias se excluyen
-# porque no son entrada/salida real de dinero de la empresa.
+# --- Flujo de Caja Proyectado -- cascada por cuenta contable --------------
+# Rediseño 2026-11-25 a pedido del usuario: no quiere filas=fechas, quiere
+# una cascada tipo Estado de Resultados (Ingresos -> Costos -> Gastos ->
+# Compromisos), con una columna por periodo (día/mes/año) y la liquidez de
+# cada periodo como la SUMA VERTICAL de esa columna (arrastrando el saldo
+# final de un periodo como saldo inicial del siguiente).
+#
+# La cuenta contable de cada peso de caja (real o proyectado) se obtiene
+# así:
+# - Ventas: cada línea (tbl_ventas_detalle.id_item) ya declara su
+#   id_cuenta_ingreso en tbl_productos_servicios (default 4.1.01.003 si es
+#   NULL).
+# - Compras con id_item: id_cuenta_costo_gasto del ítem (default 6.2.01.005
+#   si es NULL). La SECCIÓN (Costos o Gastos) la decide el tipo_cuenta real
+#   de esa cuenta -- no el tipo de documento --, igual que el Estado de
+#   Resultados ya existente (vw_estado_resultados).
+# - Compras con id_insumo (materia prima -- aún sin cuenta propia mapeada,
+#   van a inventario): fila genérica "Materia Prima / Insumos (sin cuenta
+#   mapeada)" dentro de Costos (decisión del usuario, 2026-11-25).
+# - El monto de cada línea se prorratea según su peso dentro del neto del
+#   documento, aplicado sobre el monto REAL cobrado/pagado (vía
+#   tbl_aplicaciones_pago) o sobre el saldo PENDIENTE (proyectado). El IVA
+#   se prorratea igual pero NO se reparte por cuenta -- va a una fila "IVA"
+#   aparte (IVA cobrado de clientes menos IVA pagado a proveedores), para
+#   que la suma vertical cuadre con la caja real.
+# - Movimientos de Caja que NO vienen de una Venta/Compra (aportes,
+#   préstamos, reembolsos -- confirmado con el usuario que sí ocurre):
+#   usan la cuenta manual tbl_movimientos_caja.id_cuenta_contable
+#   (sql/flujo_caja_cuenta_manual_movimiento.sql), en la sección "Otros
+#   movimientos (financiamiento / patrimonio)". Sin esa cuenta asignada,
+#   caen en "Sin clasificar" (alerta de dato a corregir).
+
+_CUENTA_DEFAULT_INGRESO_CODIGO = "4.1.01.003"
+_CUENTA_DEFAULT_COSTO_GASTO_CODIGO = "6.2.01.005"
+_CLAVE_INSUMOS_SIN_CUENTA = "INSUMOS_SIN_CUENTA"
+_CLAVE_SIN_CLASIFICAR = "SIN_CLASIFICAR"
+
 
 def _saldo_real_antes_de(conn, fecha_corte):
     """Saldo real consolidado de Caja (todas las cuentas, sin traspasos)
@@ -2360,114 +2421,313 @@ def _saldo_real_antes_de(conn, fecha_corte):
     return float(row["saldo"])
 
 
-def _eventos_flujo_caja(conn, fecha_inicio, fecha_fin):
-    return db.fetch_dicts(
-        conn,
-        """SELECT fecha, tipo_flujo, monto, origen, categoria
-           FROM vw_flujo_caja_movimientos
-           WHERE fecha BETWEEN ? AND ?""",
-        (fecha_inicio, fecha_fin),
-    )
-
-
-def _bucket_flujo_caja_vacio():
-    return {
-        "ingresos_reales": 0.0, "egresos_reales": 0.0,
-        "ingresos_proyectados": 0.0, "egresos_proyectados": 0.0,
-        "ingresos_vencidos": 0.0, "egresos_vencidos": 0.0,
-    }
-
-
-def _acumular_evento_flujo_caja(bucket, ev):
-    monto = float(ev["monto"])
-    es_ingreso = ev["tipo_flujo"] == "INGRESO"
-    if ev["origen"] == "REAL":
-        bucket["ingresos_reales" if es_ingreso else "egresos_reales"] += monto
-    else:
-        bucket["ingresos_proyectados" if es_ingreso else "egresos_proyectados"] += monto
-        if ev["origen"] == "PROYECTADO_VENCIDO":
-            bucket["ingresos_vencidos" if es_ingreso else "egresos_vencidos"] += monto
-
-
-def _fecha_como_date(valor):
-    return valor.date() if hasattr(valor, "date") else valor
-
-
 def _siguiente_mes(anio, mes):
     return (anio + 1, 1) if mes == 12 else (anio, mes + 1)
 
 
-@app.route("/api/flujo-caja/diario", methods=["GET"])
-def flujo_caja_diario():
-    """Vista diaria del Flujo de Caja Proyectado -- ventana móvil
-    (por defecto 30 días atrás / 60 días adelante), con proyectado vs.
-    real y saldo acumulado día a día."""
+def _a_date(valor):
+    """Normaliza un valor de columna DATE/DATETIME devuelto por pyodbc a
+    datetime.date (algunos drivers devuelven datetime.datetime incluso
+    para columnas DATE)."""
+    return valor.date() if hasattr(valor, "date") else valor
+
+
+def _periodo_clave(fecha, modo):
+    fecha = _a_date(fecha)
+    if modo == "anual":
+        return fecha.year
+    if modo == "mensual":
+        return (fecha.year, fecha.month)
+    return fecha
+
+
+def _periodo_etiqueta(clave, modo):
+    if modo == "anual":
+        return str(clave)
+    if modo == "mensual":
+        return f"{clave[0]}-{clave[1]:02d}"
+    return clave.isoformat()
+
+
+def _rango_periodos(fecha_inicio, fecha_fin, modo):
+    claves = []
+    if modo == "diario":
+        cur = fecha_inicio
+        while cur <= fecha_fin:
+            claves.append(cur)
+            cur += timedelta(days=1)
+    elif modo == "mensual":
+        anio, mes = fecha_inicio.year, fecha_inicio.month
+        anio_fin, mes_fin = fecha_fin.year, fecha_fin.month
+        while (anio, mes) <= (anio_fin, mes_fin):
+            claves.append((anio, mes))
+            anio, mes = _siguiente_mes(anio, mes)
+    else:
+        for anio in range(fecha_inicio.year, fecha_fin.year + 1):
+            claves.append(anio)
+    return claves
+
+
+class _CascadaAcumulador:
+    """Acumula montos por (sección, clave_fila) x periodo. `clave_fila` es
+    un id_cuenta real o una de las claves sintéticas (_CLAVE_*)."""
+
+    def __init__(self, periodos):
+        self.periodos = periodos
+        self.datos = {}
+        self.nombres_fila = {}
+
+    def sumar(self, seccion, clave_fila, nombre_fila, periodo, monto):
+        if periodo not in self.periodos or not monto:
+            return
+        llave = (seccion, clave_fila)
+        if llave not in self.datos:
+            self.datos[llave] = {p: 0.0 for p in self.periodos}
+            self.nombres_fila[llave] = nombre_fila
+        self.datos[llave][periodo] += monto
+
+
+def _cargar_cuentas(conn):
+    rows = db.fetch_dicts(conn, "SELECT id_cuenta, codigo_cuenta, nombre_cuenta, tipo_cuenta FROM cat_plan_cuentas")
+    return {r["id_cuenta"]: r for r in rows}
+
+
+def _cargar_cuenta_default(conn, codigo):
+    row = db.fetch_one_dict(conn, "SELECT id_cuenta FROM cat_plan_cuentas WHERE codigo_cuenta = ?", (codigo,))
+    return row["id_cuenta"] if row else None
+
+
+def _construir_cascada_flujo_caja(conn, fecha_inicio, fecha_fin, modo):
+    periodos = _rango_periodos(fecha_inicio, fecha_fin, modo)
+    acc = _CascadaAcumulador(periodos)
+    iva_por_periodo = {p: 0.0 for p in periodos}
+
+    cuentas = _cargar_cuentas(conn)
+    id_cuenta_ingreso_default = _cargar_cuenta_default(conn, _CUENTA_DEFAULT_INGRESO_CODIGO)
+    id_cuenta_costo_gasto_default = _cargar_cuenta_default(conn, _CUENTA_DEFAULT_COSTO_GASTO_CODIGO)
+    items_cuentas = {
+        r["id_item"]: r
+        for r in db.fetch_dicts(conn, "SELECT id_item, id_cuenta_ingreso, id_cuenta_costo_gasto FROM tbl_productos_servicios")
+    }
+
+    def seccion_de_cuenta(id_cuenta):
+        tipo = cuentas.get(id_cuenta, {}).get("tipo_cuenta")
+        if tipo == "GASTO":
+            return "GASTOS"
+        return "COSTOS"  # default razonable si la cuenta mapeada no es ni INGRESO ni GASTO
+
+    def nombre_de_cuenta(id_cuenta):
+        c = cuentas.get(id_cuenta)
+        return f"{c['codigo_cuenta']} {c['nombre_cuenta']}" if c else f"Cuenta #{id_cuenta}"
+
+    ventas_detalle = {}
+    for row in db.fetch_dicts(conn, "SELECT id_venta_devengada, id_item, subtotal_neto FROM tbl_ventas_detalle"):
+        ventas_detalle.setdefault(row["id_venta_devengada"], []).append(row)
+    compras_detalle = {}
+    for row in db.fetch_dicts(conn, "SELECT id_orden_compra, id_item, id_insumo, subtotal_neto FROM tbl_compras_detalle"):
+        compras_detalle.setdefault(row["id_orden_compra"], []).append(row)
+
+    hoy = date.today()
+
+    def repartir_venta(id_doc, monto_neto_doc, monto_iva_doc, monto_total_doc, monto_relevante, fecha_evento):
+        monto_total_doc = float(monto_total_doc or 0)
+        if monto_total_doc <= 0 or monto_relevante <= 0:
+            return
+        frac = monto_relevante / monto_total_doc
+        neto_relevante = float(monto_neto_doc or 0) * frac
+        iva_relevante = float(monto_iva_doc or 0) * frac
+        periodo = _periodo_clave(fecha_evento, modo)
+        iva_por_periodo[periodo] = iva_por_periodo.get(periodo, 0.0) + iva_relevante
+        lineas = ventas_detalle.get(id_doc, [])
+        total_lineas = sum(float(l["subtotal_neto"]) for l in lineas) or 1.0
+        for linea in lineas:
+            peso = float(linea["subtotal_neto"]) / total_lineas
+            monto_linea = neto_relevante * peso
+            item = items_cuentas.get(linea["id_item"], {})
+            id_cuenta = item.get("id_cuenta_ingreso") or id_cuenta_ingreso_default
+            acc.sumar("INGRESOS", id_cuenta, nombre_de_cuenta(id_cuenta), periodo, monto_linea)
+
+    def repartir_compra(id_doc, monto_neto_doc, monto_iva_doc, monto_total_doc, monto_relevante, fecha_evento):
+        monto_total_doc = float(monto_total_doc or 0)
+        if monto_total_doc <= 0 or monto_relevante <= 0:
+            return
+        frac = monto_relevante / monto_total_doc
+        neto_relevante = float(monto_neto_doc or 0) * frac
+        iva_relevante = float(monto_iva_doc or 0) * frac
+        periodo = _periodo_clave(fecha_evento, modo)
+        iva_por_periodo[periodo] = iva_por_periodo.get(periodo, 0.0) - iva_relevante
+        lineas = compras_detalle.get(id_doc, [])
+        total_lineas = sum(float(l["subtotal_neto"]) for l in lineas) or 1.0
+        for linea in lineas:
+            peso = float(linea["subtotal_neto"]) / total_lineas
+            monto_linea = neto_relevante * peso
+            if linea["id_item"] is not None:
+                item = items_cuentas.get(linea["id_item"], {})
+                id_cuenta = item.get("id_cuenta_costo_gasto") or id_cuenta_costo_gasto_default
+                acc.sumar(seccion_de_cuenta(id_cuenta), id_cuenta, nombre_de_cuenta(id_cuenta), periodo, -monto_linea)
+            else:
+                acc.sumar("COSTOS", _CLAVE_INSUMOS_SIN_CUENTA, "Materia Prima / Insumos (sin cuenta mapeada)", periodo, -monto_linea)
+
+    for v in db.fetch_dicts(
+        conn,
+        """SELECT id_venta_devengada, monto_neto, monto_iva, monto_total, saldo_pendiente, fecha_vencimiento
+           FROM vw_cuentas_por_cobrar WHERE saldo_pendiente > 0""",
+    ):
+        fv = _a_date(v["fecha_vencimiento"])
+        fecha_evento = fv if fv and fv >= hoy else hoy
+        repartir_venta(v["id_venta_devengada"], v["monto_neto"], v["monto_iva"], v["monto_total"], float(v["saldo_pendiente"]), fecha_evento)
+
+    for c in db.fetch_dicts(
+        conn,
+        """SELECT id_orden_compra, monto_neto, monto_iva, monto_total, saldo_pendiente, fecha_vencimiento_pago
+           FROM vw_cuentas_por_pagar WHERE saldo_pendiente > 0""",
+    ):
+        fvp = _a_date(c["fecha_vencimiento_pago"])
+        fecha_evento = fvp if fvp and fvp >= hoy else hoy
+        repartir_compra(c["id_orden_compra"], c["monto_neto"], c["monto_iva"], c["monto_total"], float(c["saldo_pendiente"]), fecha_evento)
+
+    for a in db.fetch_dicts(
+        conn,
+        """SELECT ap.id_venta_devengada, ap.monto_aplicado, m.fecha_movimiento,
+                  v.monto_neto, v.monto_iva, v.monto_total
+           FROM tbl_aplicaciones_pago ap
+           INNER JOIN tbl_movimientos_caja m ON m.id_movimiento = ap.id_movimiento
+           INNER JOIN tbl_ventas_devengadas v ON v.id_venta_devengada = ap.id_venta_devengada
+           WHERE ap.estado_activo = 1 AND ap.tipo_documento = 'VENTA'""",
+    ):
+        repartir_venta(a["id_venta_devengada"], a["monto_neto"], a["monto_iva"], a["monto_total"], float(a["monto_aplicado"]), a["fecha_movimiento"])
+
+    for a in db.fetch_dicts(
+        conn,
+        """SELECT ap.id_orden_compra, ap.monto_aplicado, m.fecha_movimiento,
+                  c.monto_neto, c.monto_iva, c.monto_total
+           FROM tbl_aplicaciones_pago ap
+           INNER JOIN tbl_movimientos_caja m ON m.id_movimiento = ap.id_movimiento
+           INNER JOIN tbl_ordenes_compra c ON c.id_orden_compra = ap.id_orden_compra
+           WHERE ap.estado_activo = 1 AND ap.tipo_documento = 'COMPRA'""",
+    ):
+        repartir_compra(a["id_orden_compra"], a["monto_neto"], a["monto_iva"], a["monto_total"], float(a["monto_aplicado"]), a["fecha_movimiento"])
+
+    for r in db.fetch_dicts(
+        conn,
+        """SELECT s.id_movimiento, s.fecha_movimiento, s.tipo_flujo, s.monto_disponible, m.id_cuenta_contable
+           FROM vw_movimientos_caja_saldo_aplicacion s
+           INNER JOIN tbl_movimientos_caja m ON m.id_movimiento = s.id_movimiento
+           WHERE s.monto_disponible > 0""",
+    ):
+        monto = float(r["monto_disponible"])
+        signo = 1 if r["tipo_flujo"] == "INGRESO" else -1
+        periodo = _periodo_clave(r["fecha_movimiento"], modo)
+        if r["id_cuenta_contable"]:
+            id_cuenta = r["id_cuenta_contable"]
+            acc.sumar("OTROS_FINANCIAMIENTO", id_cuenta, nombre_de_cuenta(id_cuenta), periodo, signo * monto)
+        else:
+            acc.sumar("SIN_CLASIFICAR", _CLAVE_SIN_CLASIFICAR, "Movimientos de Caja sin documento ni cuenta asignada", periodo, signo * monto)
+
+    return periodos, acc, iva_por_periodo
+
+
+def _secciones_orden():
+    return [
+        ("INGRESOS", "Ingresos"),
+        ("COSTOS", "Costos"),
+        ("GASTOS", "Gastos"),
+        ("COMPROMISOS", "Compromisos recurrentes (arriendos, servicios, sueldos, créditos -- Fase B, aún no construida)"),
+        ("OTROS_FINANCIAMIENTO", "Otros movimientos (financiamiento / patrimonio)"),
+        ("SIN_CLASIFICAR", "Sin clasificar"),
+    ]
+
+
+def _serializar_cascada(periodos, acc, iva_por_periodo, modo, saldo_apertura_ventana):
+    etiquetas = [_periodo_etiqueta(p, modo) for p in periodos]
+
+    secciones_resp = []
+    subtotales_seccion = {}
+    for clave_seccion, nombre_seccion in _secciones_orden():
+        filas = []
+        subtotal = {p: 0.0 for p in periodos}
+        for (seccion, clave_fila), valores in acc.datos.items():
+            if seccion != clave_seccion:
+                continue
+            filas.append({
+                "clave": str(clave_fila),
+                "nombre": acc.nombres_fila[(seccion, clave_fila)],
+                "valores": [round(valores[p], 2) for p in periodos],
+            })
+            for p in periodos:
+                subtotal[p] += valores[p]
+        filas.sort(key=lambda f: f["nombre"])
+        subtotales_seccion[clave_seccion] = subtotal
+        secciones_resp.append({
+            "clave": clave_seccion,
+            "nombre": nombre_seccion,
+            "filas": filas,
+            "subtotal": [round(subtotal[p], 2) for p in periodos],
+        })
+
+    margen_bruto = {p: subtotales_seccion["INGRESOS"][p] + subtotales_seccion["COSTOS"][p] for p in periodos}
+    resultado_antes_compromisos = {p: margen_bruto[p] + subtotales_seccion["GASTOS"][p] for p in periodos}
+
+    liquidez = []
+    saldo_inicial_por_columna = []
+    saldo = saldo_apertura_ventana
+    for p in periodos:
+        saldo_inicial_por_columna.append(round(saldo, 2))
+        neto_periodo = (
+            subtotales_seccion["INGRESOS"][p]
+            + subtotales_seccion["COSTOS"][p]
+            + subtotales_seccion["GASTOS"][p]
+            + subtotales_seccion["COMPROMISOS"][p]
+            + subtotales_seccion["OTROS_FINANCIAMIENTO"][p]
+            + subtotales_seccion["SIN_CLASIFICAR"][p]
+            + iva_por_periodo.get(p, 0.0)
+        )
+        saldo += neto_periodo
+        liquidez.append(round(saldo, 2))
+
+    return {
+        "periodos": etiquetas,
+        "saldo_inicial": saldo_inicial_por_columna,
+        "secciones": secciones_resp,
+        "margen_bruto": [round(margen_bruto[p], 2) for p in periodos],
+        "resultado_antes_compromisos": [round(resultado_antes_compromisos[p], 2) for p in periodos],
+        "iva": [round(iva_por_periodo.get(p, 0.0), 2) for p in periodos],
+        "liquidez": liquidez,
+    }
+
+
+@app.route("/api/flujo-caja/cascada/diario", methods=["GET"])
+def flujo_caja_cascada_diario():
     err = _requiere_mssql()
     if err:
         return err
     try:
-        dias_atras = int(request.args.get("dias_atras", 30))
-        dias_adelante = int(request.args.get("dias_adelante", 60))
+        dias_atras = int(request.args.get("dias_atras", 14))
+        dias_adelante = int(request.args.get("dias_adelante", 45))
     except ValueError:
         return error("dias_atras y dias_adelante deben ser enteros.")
-
     hoy = date.today()
     fecha_inicio = hoy - timedelta(days=dias_atras)
     fecha_fin = hoy + timedelta(days=dias_adelante)
-
     conn = db.get_conn()
     saldo_apertura = _saldo_real_antes_de(conn, fecha_inicio)
-    eventos = _eventos_flujo_caja(conn, fecha_inicio, fecha_fin)
+    periodos, acc, iva_por_periodo = _construir_cascada_flujo_caja(conn, fecha_inicio, fecha_fin, "diario")
     conn.close()
-
-    buckets = {}
-    cur = fecha_inicio
-    while cur <= fecha_fin:
-        buckets[cur] = _bucket_flujo_caja_vacio()
-        cur += timedelta(days=1)
-    for ev in eventos:
-        fecha_ev = _fecha_como_date(ev["fecha"])
-        if fecha_ev in buckets:
-            _acumular_evento_flujo_caja(buckets[fecha_ev], ev)
-
-    dias = []
-    saldo = saldo_apertura
-    cur = fecha_inicio
-    while cur <= fecha_fin:
-        b = buckets[cur]
-        flujo_neto = (b["ingresos_reales"] + b["ingresos_proyectados"]) - (b["egresos_reales"] + b["egresos_proyectados"])
-        saldo += flujo_neto
-        dias.append({
-            "fecha": cur.isoformat(),
-            "es_hoy": cur == hoy,
-            **b,
-            "flujo_neto": flujo_neto,
-            "saldo_acumulado": saldo,
-        })
-        cur += timedelta(days=1)
-
-    return jsonify({
-        "saldo_apertura": saldo_apertura,
-        "fecha_inicio": fecha_inicio.isoformat(),
-        "fecha_fin": fecha_fin.isoformat(),
-        "hoy": hoy.isoformat(),
-        "dias": dias,
-    })
+    resp = _serializar_cascada(periodos, acc, iva_por_periodo, "diario", saldo_apertura)
+    resp["hoy"] = hoy.isoformat()
+    return jsonify(resp)
 
 
-@app.route("/api/flujo-caja/mensual", methods=["GET"])
-def flujo_caja_mensual():
-    """Vista mensual del Flujo de Caja Proyectado -- ventana móvil
-    (por defecto 6 meses atrás / 12 meses adelante)."""
+@app.route("/api/flujo-caja/cascada/mensual", methods=["GET"])
+def flujo_caja_cascada_mensual():
     err = _requiere_mssql()
     if err:
         return err
     try:
-        meses_atras = int(request.args.get("meses_atras", 6))
+        meses_atras = int(request.args.get("meses_atras", 3))
         meses_adelante = int(request.args.get("meses_adelante", 12))
     except ValueError:
         return error("meses_atras y meses_adelante deben ser enteros.")
-
     hoy = date.today()
     anio_ini, mes_ini = hoy.year, hoy.month
     for _ in range(meses_atras):
@@ -2475,111 +2735,37 @@ def flujo_caja_mensual():
     anio_fin, mes_fin = hoy.year, hoy.month
     for _ in range(meses_adelante):
         anio_fin, mes_fin = _siguiente_mes(anio_fin, mes_fin)
-
     fecha_inicio = date(anio_ini, mes_ini, 1)
     anio_fin_sig, mes_fin_sig = _siguiente_mes(anio_fin, mes_fin)
     fecha_fin = date(anio_fin_sig, mes_fin_sig, 1) - timedelta(days=1)
-
     conn = db.get_conn()
     saldo_apertura = _saldo_real_antes_de(conn, fecha_inicio)
-    eventos = _eventos_flujo_caja(conn, fecha_inicio, fecha_fin)
+    periodos, acc, iva_por_periodo = _construir_cascada_flujo_caja(conn, fecha_inicio, fecha_fin, "mensual")
     conn.close()
-
-    orden_meses = []
-    buckets = {}
-    anio, mes = anio_ini, mes_ini
-    while (anio, mes) <= (anio_fin, mes_fin):
-        clave = (anio, mes)
-        orden_meses.append(clave)
-        buckets[clave] = _bucket_flujo_caja_vacio()
-        anio, mes = _siguiente_mes(anio, mes)
-
-    for ev in eventos:
-        fecha_ev = _fecha_como_date(ev["fecha"])
-        clave = (fecha_ev.year, fecha_ev.month)
-        if clave in buckets:
-            _acumular_evento_flujo_caja(buckets[clave], ev)
-
-    mes_actual_clave = (hoy.year, hoy.month)
-    meses = []
-    saldo = saldo_apertura
-    for clave in orden_meses:
-        b = buckets[clave]
-        flujo_neto = (b["ingresos_reales"] + b["ingresos_proyectados"]) - (b["egresos_reales"] + b["egresos_proyectados"])
-        saldo += flujo_neto
-        meses.append({
-            "anio": clave[0], "mes": clave[1],
-            "etiqueta": f"{clave[0]}-{clave[1]:02d}",
-            "es_mes_actual": clave == mes_actual_clave,
-            **b,
-            "flujo_neto": flujo_neto,
-            "saldo_acumulado": saldo,
-        })
-
-    return jsonify({
-        "saldo_apertura": saldo_apertura,
-        "hoy": hoy.isoformat(),
-        "meses": meses,
-    })
+    resp = _serializar_cascada(periodos, acc, iva_por_periodo, "mensual", saldo_apertura)
+    resp["hoy"] = hoy.isoformat()
+    return jsonify(resp)
 
 
-@app.route("/api/flujo-caja/anual", methods=["GET"])
-def flujo_caja_anual():
-    """Comparación año contra año del flujo de caja real acumulado
-    (método directo aplicado en retrospectiva, no el método indirecto de
-    un Estado de Flujo de Efectivo formal), más lo proyectado pendiente
-    para lo que resta del año en curso."""
+@app.route("/api/flujo-caja/cascada/anual", methods=["GET"])
+def flujo_caja_cascada_anual():
+    """Histórico real año contra año (método directo aplicado en
+    retrospectiva) + lo proyectado pendiente del año en curso."""
     err = _requiere_mssql()
     if err:
         return err
     conn = db.get_conn()
-    reales = db.fetch_dicts(
-        conn,
-        """SELECT YEAR(fecha_movimiento) AS anio,
-                  SUM(CASE WHEN tipo_flujo = 'INGRESO' THEN monto_absoluto ELSE 0 END) AS ingresos_reales,
-                  SUM(CASE WHEN tipo_flujo = 'EGRESO' THEN monto_absoluto ELSE 0 END) AS egresos_reales
-           FROM tbl_movimientos_caja
-           WHERE tipo_flujo IN ('INGRESO', 'EGRESO')
-           GROUP BY YEAR(fecha_movimiento)
-           ORDER BY YEAR(fecha_movimiento) ASC""",
-    )
+    primer_anio = db.fetch_one_dict(conn, "SELECT MIN(YEAR(fecha_movimiento)) AS anio FROM tbl_movimientos_caja")
     hoy = date.today()
-    proyectado_anio_actual = db.fetch_dicts(
-        conn,
-        """SELECT
-               ISNULL(SUM(CASE WHEN tipo_flujo = 'INGRESO' THEN monto ELSE 0 END), 0) AS ingresos_proyectados,
-               ISNULL(SUM(CASE WHEN tipo_flujo = 'EGRESO' THEN monto ELSE 0 END), 0) AS egresos_proyectados
-           FROM vw_flujo_caja_movimientos
-           WHERE origen IN ('PROYECTADO', 'PROYECTADO_VENCIDO') AND YEAR(fecha) = ?""",
-        (hoy.year,),
-    )
+    anio_inicio = (primer_anio["anio"] if primer_anio and primer_anio["anio"] else hoy.year)
+    fecha_inicio = date(anio_inicio, 1, 1)
+    fecha_fin = date(hoy.year, 12, 31)
+    saldo_apertura = _saldo_real_antes_de(conn, fecha_inicio)
+    periodos, acc, iva_por_periodo = _construir_cascada_flujo_caja(conn, fecha_inicio, fecha_fin, "anual")
     conn.close()
-
-    saldo_acumulado = 0.0
-    anios = []
-    for r in reales:
-        ingresos = float(r["ingresos_reales"] or 0)
-        egresos = float(r["egresos_reales"] or 0)
-        flujo_neto = ingresos - egresos
-        saldo_acumulado += flujo_neto
-        anios.append({
-            "anio": r["anio"],
-            "ingresos_reales": ingresos,
-            "egresos_reales": egresos,
-            "flujo_neto": flujo_neto,
-            "saldo_acumulado_fin_anio": saldo_acumulado,
-            "es_anio_actual": r["anio"] == hoy.year,
-        })
-
-    proy = proyectado_anio_actual[0] if proyectado_anio_actual else {}
-    return jsonify({
-        "anios": anios,
-        "proyectado_resto_anio_actual": {
-            "anio": hoy.year,
-            "ingresos_proyectados": float(proy.get("ingresos_proyectados") or 0),
-            "egresos_proyectados": float(proy.get("egresos_proyectados") or 0),
-        },
-    })
+    resp = _serializar_cascada(periodos, acc, iva_por_periodo, "anual", saldo_apertura)
+    resp["hoy"] = hoy.isoformat()
+    return jsonify(resp)
 
 
 # --- Carga masiva de Caja (Fase 5) -----------------------------------------

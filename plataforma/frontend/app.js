@@ -111,13 +111,15 @@ let CACHE_TERCEROS = [];
 let CACHE_CENTROS = [];
 let CACHE_PRODUCTOS = [];
 let CACHE_CUENTAS_TESORERIA = [];
+let CACHE_PLAN_CUENTAS = [];
 
 async function refreshCatalogCaches() {
-  [CACHE_TERCEROS, CACHE_CENTROS, CACHE_PRODUCTOS, CACHE_CUENTAS_TESORERIA] = await Promise.all([
+  [CACHE_TERCEROS, CACHE_CENTROS, CACHE_PRODUCTOS, CACHE_CUENTAS_TESORERIA, CACHE_PLAN_CUENTAS] = await Promise.all([
     apiGet("/terceros"),
     apiGet("/centros_costo"),
     apiGet("/productos"),
     apiGet("/catalogos/cuentas-tesoreria"),
+    apiGet("/catalogos/plan-cuentas"),
   ]);
 }
 
@@ -196,6 +198,22 @@ function fillCuentaTesoreriaSelects() {
   });
 }
 
+function fillPlanCuentasSelects() {
+  document.querySelectorAll("select#caja-cuenta-contable").forEach((sel) => {
+    const current = sel.value;
+    const placeholder = sel.querySelector('option[value=""]');
+    sel.innerHTML = "";
+    if (placeholder) sel.appendChild(placeholder);
+    CACHE_PLAN_CUENTAS.forEach((c) => {
+      const o = document.createElement("option");
+      o.value = c.id_cuenta;
+      o.textContent = `${c.codigo_cuenta} ${c.nombre_cuenta}`;
+      sel.appendChild(o);
+    });
+    if (current) sel.value = current;
+  });
+}
+
 async function refreshAllSelects() {
   await refreshCatalogCaches();
   fillTerceroSelects("cliente");
@@ -203,6 +221,7 @@ async function refreshAllSelects() {
   fillCentroSelects();
   fillProductoSelects();
   fillCuentaTesoreriaSelects();
+  fillPlanCuentasSelects();
 }
 
 // ---------------------------------------------------------------------------
@@ -668,86 +687,61 @@ function initCobrosYPagos() {
 }
 
 // ---------------------------------------------------------------------------
-// Flujo de Caja Proyectado -- reporte (diaria / mensual / anual)
+// Flujo de Caja Proyectado -- cascada por cuenta contable (diaria/mensual/anual)
 // ---------------------------------------------------------------------------
 
 let FC_SUBVISTA_ACTUAL = "diario";
 
-function filaVencidaTexto(valorProyectado, valorVencido) {
-  if (!valorVencido) return fmtMoney(valorProyectado);
-  return `${fmtMoney(valorProyectado)} (⚠ ${fmtMoney(valorVencido)} vencido)`;
+function fmtMoneySigned(n) {
+  const v = Number(n || 0);
+  return v < 0 ? `(${fmtMoney(Math.abs(v))})` : fmtMoney(v);
 }
 
-async function loadFlujoCajaDiario() {
-  const data = await apiGet("/flujo-caja/diario");
-  document.getElementById("fc-diario-fecha-inicio").textContent = fmtFecha(data.fecha_inicio);
-  document.getElementById("fc-diario-saldo-apertura").textContent = fmtMoney(data.saldo_apertura);
-  const tbody = document.querySelector("#tabla-flujo-caja-diario tbody");
-  tbody.innerHTML = "";
-  data.dias.forEach((d) => {
-    const tr = document.createElement("tr");
-    if (d.ingresos_vencidos > 0 || d.egresos_vencidos > 0) tr.classList.add("fila-vencido");
-    if (d.es_hoy) tr.classList.add("fila-hoy");
-    tr.innerHTML = `
-      <td>${fmtFecha(d.fecha)}${d.es_hoy ? " (hoy)" : ""}</td>
-      <td>${fmtMoney(d.ingresos_reales)}</td>
-      <td>${fmtMoney(d.egresos_reales)}</td>
-      <td>${filaVencidaTexto(d.ingresos_proyectados, d.ingresos_vencidos)}</td>
-      <td>${filaVencidaTexto(d.egresos_proyectados, d.egresos_vencidos)}</td>
-      <td>${fmtMoney(d.flujo_neto)}</td>
-      <td>${fmtMoney(d.saldo_acumulado)}</td>
-    `;
-    tbody.appendChild(tr);
-  });
+function fcFilaHtml(nombre, valores, opts) {
+  opts = opts || {};
+  const celdas = valores.map((v) => `<td>${fmtMoneySigned(v)}</td>`).join("");
+  return `<tr class="${opts.claseFila || ""}"><td>${nombre}</td>${celdas}</tr>`;
 }
 
-async function loadFlujoCajaMensual() {
-  const data = await apiGet("/flujo-caja/mensual");
-  document.getElementById("fc-mensual-saldo-apertura").textContent = fmtMoney(data.saldo_apertura);
-  const tbody = document.querySelector("#tabla-flujo-caja-mensual tbody");
-  tbody.innerHTML = "";
-  data.meses.forEach((m) => {
-    const tr = document.createElement("tr");
-    if (m.ingresos_vencidos > 0 || m.egresos_vencidos > 0) tr.classList.add("fila-vencido");
-    if (m.es_mes_actual) tr.classList.add("fila-hoy");
-    tr.innerHTML = `
-      <td>${m.etiqueta}${m.es_mes_actual ? " (actual)" : ""}</td>
-      <td>${fmtMoney(m.ingresos_reales)}</td>
-      <td>${fmtMoney(m.egresos_reales)}</td>
-      <td>${filaVencidaTexto(m.ingresos_proyectados, m.ingresos_vencidos)}</td>
-      <td>${filaVencidaTexto(m.egresos_proyectados, m.egresos_vencidos)}</td>
-      <td>${fmtMoney(m.flujo_neto)}</td>
-      <td>${fmtMoney(m.saldo_acumulado)}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
+function renderCascadaFlujoCaja(data) {
+  const thead = document.querySelector("#tabla-flujo-caja-cascada thead");
+  const tbody = document.querySelector("#tabla-flujo-caja-cascada tbody");
 
-async function loadFlujoCajaAnual() {
-  const data = await apiGet("/flujo-caja/anual");
-  const tbody = document.querySelector("#tabla-flujo-caja-anual tbody");
-  tbody.innerHTML = "";
-  data.anios.forEach((a) => {
-    const tr = document.createElement("tr");
-    if (a.es_anio_actual) tr.classList.add("fila-hoy");
-    tr.innerHTML = `
-      <td>${a.anio}${a.es_anio_actual ? " (actual)" : ""}</td>
-      <td>${fmtMoney(a.ingresos_reales)}</td>
-      <td>${fmtMoney(a.egresos_reales)}</td>
-      <td>${fmtMoney(a.flujo_neto)}</td>
-      <td>${fmtMoney(a.saldo_acumulado_fin_anio)}</td>
-    `;
-    tbody.appendChild(tr);
+  const headCeldas = data.periodos.map((p) => `<th>${p}${p === data.hoy ? " (hoy)" : ""}</th>`).join("");
+  thead.innerHTML = `<tr><th>Cuenta</th>${headCeldas}</tr>`;
+
+  let html = "";
+  html += fcFilaHtml("Saldo Inicial", data.saldo_inicial, { claseFila: "fila-subtotal" });
+
+  data.secciones.forEach((seccion) => {
+    if (seccion.clave === "COMPROMISOS" && seccion.filas.length === 0) {
+      html += `<tr class="fila-seccion"><td colspan="${data.periodos.length + 1}">${seccion.nombre}</td></tr>`;
+      html += `<tr class="fila-cuenta"><td>(sin compromisos recurrentes registrados todavía)</td>${data.periodos.map(() => "<td>—</td>").join("")}</tr>`;
+      return;
+    }
+    if (seccion.filas.length === 0) return; // Otros / Sin clasificar: ocultar si no hay nada
+    html += `<tr class="fila-seccion"><td colspan="${data.periodos.length + 1}">${seccion.nombre}</td></tr>`;
+    seccion.filas.forEach((fila) => {
+      html += fcFilaHtml(fila.nombre, fila.valores, { claseFila: "fila-cuenta" });
+    });
+    html += fcFilaHtml(`Total ${seccion.nombre}`, seccion.subtotal, { claseFila: "fila-subtotal" });
+    if (seccion.clave === "COSTOS") {
+      html += fcFilaHtml("Margen Bruto", data.margen_bruto, { claseFila: "fila-subtotal" });
+    }
+    if (seccion.clave === "GASTOS") {
+      html += fcFilaHtml("Resultado antes de Compromisos", data.resultado_antes_compromisos, { claseFila: "fila-subtotal" });
+    }
   });
-  const p = data.proyectado_resto_anio_actual;
-  document.getElementById("fc-anual-proyectado-resto").textContent =
-    `Proyectado pendiente para lo que resta de ${p.anio}: ingresos ${fmtMoney(p.ingresos_proyectados)}, egresos ${fmtMoney(p.egresos_proyectados)}.`;
+
+  html += fcFilaHtml("IVA (cobrado - pagado)", data.iva, { claseFila: "fila-subtotal" });
+  html += fcFilaHtml("Liquidez (Saldo Final)", data.liquidez, { claseFila: "fila-liquidez" });
+
+  tbody.innerHTML = html;
 }
 
 async function loadFlujoCaja() {
-  if (FC_SUBVISTA_ACTUAL === "diario") await loadFlujoCajaDiario();
-  else if (FC_SUBVISTA_ACTUAL === "mensual") await loadFlujoCajaMensual();
-  else await loadFlujoCajaAnual();
+  const data = await apiGet(`/flujo-caja/cascada/${FC_SUBVISTA_ACTUAL}`);
+  renderCascadaFlujoCaja(data);
 }
 
 function initFlujoCaja() {
@@ -755,11 +749,7 @@ function initFlujoCaja() {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".subnav-btn[data-subvista-fc]").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      document.querySelectorAll(".subvista-flujo-caja").forEach((v) => {
-        v.style.display = "none";
-      });
       FC_SUBVISTA_ACTUAL = btn.dataset.subvistaFc;
-      document.getElementById(`fc-subvista-${FC_SUBVISTA_ACTUAL}`).style.display = "";
       loadFlujoCaja();
     });
   });
