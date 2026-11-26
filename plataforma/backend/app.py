@@ -13,7 +13,7 @@ producción contra SQL Server.
 
 import os
 import sqlite3
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
@@ -2334,6 +2334,252 @@ def desactivar_aplicacion_pago(id_aplicacion):
         return error(f"No se pudo desvincular la aplicación: {exc}")
     conn.close()
     return jsonify({"ok": True})
+
+
+# --- Flujo de Caja Proyectado -- Reporte (diaria/mensual/anual) -----------
+# Se apoya en vw_flujo_caja_movimientos (sql/flujo_caja_fase_reporte.sql):
+# una fila por evento de caja, real (ya ocurrido) o proyectado (saldo
+# pendiente de una venta/compra en su fecha de vencimiento; si ya venció se
+# reubica en HOY con origen PROYECTADO_VENCIDO). Consolidado entre todas
+# las cuentas bancarias -- los traspasos entre cuentas propias se excluyen
+# porque no son entrada/salida real de dinero de la empresa.
+
+def _saldo_real_antes_de(conn, fecha_corte):
+    """Saldo real consolidado de Caja (todas las cuentas, sin traspasos)
+    acumulado hasta ANTES de fecha_corte (no incluye ese día) -- es el
+    saldo de apertura para proyectar hacia adelante desde esa fecha."""
+    row = db.fetch_one_dict(
+        conn,
+        """SELECT ISNULL(SUM(CASE WHEN tipo_flujo = 'INGRESO' THEN monto_absoluto
+                                   WHEN tipo_flujo = 'EGRESO' THEN -monto_absoluto
+                                   ELSE 0 END), 0) AS saldo
+           FROM tbl_movimientos_caja
+           WHERE tipo_flujo IN ('INGRESO', 'EGRESO') AND fecha_movimiento < ?""",
+        (fecha_corte,),
+    )
+    return float(row["saldo"])
+
+
+def _eventos_flujo_caja(conn, fecha_inicio, fecha_fin):
+    return db.fetch_dicts(
+        conn,
+        """SELECT fecha, tipo_flujo, monto, origen, categoria
+           FROM vw_flujo_caja_movimientos
+           WHERE fecha BETWEEN ? AND ?""",
+        (fecha_inicio, fecha_fin),
+    )
+
+
+def _bucket_flujo_caja_vacio():
+    return {
+        "ingresos_reales": 0.0, "egresos_reales": 0.0,
+        "ingresos_proyectados": 0.0, "egresos_proyectados": 0.0,
+        "ingresos_vencidos": 0.0, "egresos_vencidos": 0.0,
+    }
+
+
+def _acumular_evento_flujo_caja(bucket, ev):
+    monto = float(ev["monto"])
+    es_ingreso = ev["tipo_flujo"] == "INGRESO"
+    if ev["origen"] == "REAL":
+        bucket["ingresos_reales" if es_ingreso else "egresos_reales"] += monto
+    else:
+        bucket["ingresos_proyectados" if es_ingreso else "egresos_proyectados"] += monto
+        if ev["origen"] == "PROYECTADO_VENCIDO":
+            bucket["ingresos_vencidos" if es_ingreso else "egresos_vencidos"] += monto
+
+
+def _fecha_como_date(valor):
+    return valor.date() if hasattr(valor, "date") else valor
+
+
+def _siguiente_mes(anio, mes):
+    return (anio + 1, 1) if mes == 12 else (anio, mes + 1)
+
+
+@app.route("/api/flujo-caja/diario", methods=["GET"])
+def flujo_caja_diario():
+    """Vista diaria del Flujo de Caja Proyectado -- ventana móvil
+    (por defecto 30 días atrás / 60 días adelante), con proyectado vs.
+    real y saldo acumulado día a día."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    try:
+        dias_atras = int(request.args.get("dias_atras", 30))
+        dias_adelante = int(request.args.get("dias_adelante", 60))
+    except ValueError:
+        return error("dias_atras y dias_adelante deben ser enteros.")
+
+    hoy = date.today()
+    fecha_inicio = hoy - timedelta(days=dias_atras)
+    fecha_fin = hoy + timedelta(days=dias_adelante)
+
+    conn = db.get_conn()
+    saldo_apertura = _saldo_real_antes_de(conn, fecha_inicio)
+    eventos = _eventos_flujo_caja(conn, fecha_inicio, fecha_fin)
+    conn.close()
+
+    buckets = {}
+    cur = fecha_inicio
+    while cur <= fecha_fin:
+        buckets[cur] = _bucket_flujo_caja_vacio()
+        cur += timedelta(days=1)
+    for ev in eventos:
+        fecha_ev = _fecha_como_date(ev["fecha"])
+        if fecha_ev in buckets:
+            _acumular_evento_flujo_caja(buckets[fecha_ev], ev)
+
+    dias = []
+    saldo = saldo_apertura
+    cur = fecha_inicio
+    while cur <= fecha_fin:
+        b = buckets[cur]
+        flujo_neto = (b["ingresos_reales"] + b["ingresos_proyectados"]) - (b["egresos_reales"] + b["egresos_proyectados"])
+        saldo += flujo_neto
+        dias.append({
+            "fecha": cur.isoformat(),
+            "es_hoy": cur == hoy,
+            **b,
+            "flujo_neto": flujo_neto,
+            "saldo_acumulado": saldo,
+        })
+        cur += timedelta(days=1)
+
+    return jsonify({
+        "saldo_apertura": saldo_apertura,
+        "fecha_inicio": fecha_inicio.isoformat(),
+        "fecha_fin": fecha_fin.isoformat(),
+        "hoy": hoy.isoformat(),
+        "dias": dias,
+    })
+
+
+@app.route("/api/flujo-caja/mensual", methods=["GET"])
+def flujo_caja_mensual():
+    """Vista mensual del Flujo de Caja Proyectado -- ventana móvil
+    (por defecto 6 meses atrás / 12 meses adelante)."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    try:
+        meses_atras = int(request.args.get("meses_atras", 6))
+        meses_adelante = int(request.args.get("meses_adelante", 12))
+    except ValueError:
+        return error("meses_atras y meses_adelante deben ser enteros.")
+
+    hoy = date.today()
+    anio_ini, mes_ini = hoy.year, hoy.month
+    for _ in range(meses_atras):
+        anio_ini, mes_ini = (anio_ini - 1, 12) if mes_ini == 1 else (anio_ini, mes_ini - 1)
+    anio_fin, mes_fin = hoy.year, hoy.month
+    for _ in range(meses_adelante):
+        anio_fin, mes_fin = _siguiente_mes(anio_fin, mes_fin)
+
+    fecha_inicio = date(anio_ini, mes_ini, 1)
+    anio_fin_sig, mes_fin_sig = _siguiente_mes(anio_fin, mes_fin)
+    fecha_fin = date(anio_fin_sig, mes_fin_sig, 1) - timedelta(days=1)
+
+    conn = db.get_conn()
+    saldo_apertura = _saldo_real_antes_de(conn, fecha_inicio)
+    eventos = _eventos_flujo_caja(conn, fecha_inicio, fecha_fin)
+    conn.close()
+
+    orden_meses = []
+    buckets = {}
+    anio, mes = anio_ini, mes_ini
+    while (anio, mes) <= (anio_fin, mes_fin):
+        clave = (anio, mes)
+        orden_meses.append(clave)
+        buckets[clave] = _bucket_flujo_caja_vacio()
+        anio, mes = _siguiente_mes(anio, mes)
+
+    for ev in eventos:
+        fecha_ev = _fecha_como_date(ev["fecha"])
+        clave = (fecha_ev.year, fecha_ev.month)
+        if clave in buckets:
+            _acumular_evento_flujo_caja(buckets[clave], ev)
+
+    mes_actual_clave = (hoy.year, hoy.month)
+    meses = []
+    saldo = saldo_apertura
+    for clave in orden_meses:
+        b = buckets[clave]
+        flujo_neto = (b["ingresos_reales"] + b["ingresos_proyectados"]) - (b["egresos_reales"] + b["egresos_proyectados"])
+        saldo += flujo_neto
+        meses.append({
+            "anio": clave[0], "mes": clave[1],
+            "etiqueta": f"{clave[0]}-{clave[1]:02d}",
+            "es_mes_actual": clave == mes_actual_clave,
+            **b,
+            "flujo_neto": flujo_neto,
+            "saldo_acumulado": saldo,
+        })
+
+    return jsonify({
+        "saldo_apertura": saldo_apertura,
+        "hoy": hoy.isoformat(),
+        "meses": meses,
+    })
+
+
+@app.route("/api/flujo-caja/anual", methods=["GET"])
+def flujo_caja_anual():
+    """Comparación año contra año del flujo de caja real acumulado
+    (método directo aplicado en retrospectiva, no el método indirecto de
+    un Estado de Flujo de Efectivo formal), más lo proyectado pendiente
+    para lo que resta del año en curso."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    conn = db.get_conn()
+    reales = db.fetch_dicts(
+        conn,
+        """SELECT YEAR(fecha_movimiento) AS anio,
+                  SUM(CASE WHEN tipo_flujo = 'INGRESO' THEN monto_absoluto ELSE 0 END) AS ingresos_reales,
+                  SUM(CASE WHEN tipo_flujo = 'EGRESO' THEN monto_absoluto ELSE 0 END) AS egresos_reales
+           FROM tbl_movimientos_caja
+           WHERE tipo_flujo IN ('INGRESO', 'EGRESO')
+           GROUP BY YEAR(fecha_movimiento)
+           ORDER BY YEAR(fecha_movimiento) ASC""",
+    )
+    hoy = date.today()
+    proyectado_anio_actual = db.fetch_dicts(
+        conn,
+        """SELECT
+               ISNULL(SUM(CASE WHEN tipo_flujo = 'INGRESO' THEN monto ELSE 0 END), 0) AS ingresos_proyectados,
+               ISNULL(SUM(CASE WHEN tipo_flujo = 'EGRESO' THEN monto ELSE 0 END), 0) AS egresos_proyectados
+           FROM vw_flujo_caja_movimientos
+           WHERE origen IN ('PROYECTADO', 'PROYECTADO_VENCIDO') AND YEAR(fecha) = ?""",
+        (hoy.year,),
+    )
+    conn.close()
+
+    saldo_acumulado = 0.0
+    anios = []
+    for r in reales:
+        ingresos = float(r["ingresos_reales"] or 0)
+        egresos = float(r["egresos_reales"] or 0)
+        flujo_neto = ingresos - egresos
+        saldo_acumulado += flujo_neto
+        anios.append({
+            "anio": r["anio"],
+            "ingresos_reales": ingresos,
+            "egresos_reales": egresos,
+            "flujo_neto": flujo_neto,
+            "saldo_acumulado_fin_anio": saldo_acumulado,
+            "es_anio_actual": r["anio"] == hoy.year,
+        })
+
+    proy = proyectado_anio_actual[0] if proyectado_anio_actual else {}
+    return jsonify({
+        "anios": anios,
+        "proyectado_resto_anio_actual": {
+            "anio": hoy.year,
+            "ingresos_proyectados": float(proy.get("ingresos_proyectados") or 0),
+            "egresos_proyectados": float(proy.get("egresos_proyectados") or 0),
+        },
+    })
 
 
 # --- Carga masiva de Caja (Fase 5) -----------------------------------------

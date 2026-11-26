@@ -16,6 +16,7 @@
       <button class="nav-btn" data-view="compras">📦 Compras y Gastos</button>
       <button class="nav-btn" data-view="caja">💰 Caja</button>
       <button class="nav-btn" data-view="cobros-pagos">💵 Cobros y Pagos</button>
+      <button class="nav-btn" data-view="flujo-caja">💧 Flujo de Caja</button>
       <button class="nav-btn" data-view="catalogos">📇 Catálogos</button>
       <button class="nav-btn" data-view="informes">📈 Informes</button>
     </nav>
@@ -297,6 +298,44 @@
         <thead><tr><th>Folio</th><th>Proveedor</th><th>Emisión</th><th>Vencimiento pago</th><th>Total</th><th>Aplicado</th><th>Saldo pendiente</th><th>Estado</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <section id="view-flujo-caja" class="view">
+      <div class="panel-header">
+        <h2>Flujo de Caja Proyectado</h2>
+      </div>
+      <p class="hint">Combina lo ya ocurrido en Caja (real) con lo que falta por cobrar/pagar según las fechas de vencimiento (proyectado). Un documento vencido y aún pendiente se muestra en "Hoy", marcado como vencido, para que no se pierda de vista.</p>
+
+      <div class="subnav">
+        <button type="button" class="subnav-btn active" data-subvista-fc="diario">Diaria</button>
+        <button type="button" class="subnav-btn" data-subvista-fc="mensual">Mensual</button>
+        <button type="button" class="subnav-btn" data-subvista-fc="anual">Anual (histórico)</button>
+      </div>
+
+      <div id="fc-subvista-diario" class="subvista-flujo-caja">
+        <p>Saldo de apertura al <span id="fc-diario-fecha-inicio"></span>: <strong id="fc-diario-saldo-apertura"></strong></p>
+        <table class="data-table" id="tabla-flujo-caja-diario">
+          <thead><tr><th>Fecha</th><th>Ingresos reales</th><th>Egresos reales</th><th>Ingresos proyectados</th><th>Egresos proyectados</th><th>Flujo neto</th><th>Saldo acumulado</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="fc-subvista-mensual" class="subvista-flujo-caja" style="display:none;">
+        <p>Saldo de apertura: <strong id="fc-mensual-saldo-apertura"></strong></p>
+        <table class="data-table" id="tabla-flujo-caja-mensual">
+          <thead><tr><th>Mes</th><th>Ingresos reales</th><th>Egresos reales</th><th>Ingresos proyectados</th><th>Egresos proyectados</th><th>Flujo neto</th><th>Saldo acumulado</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div id="fc-subvista-anual" class="subvista-flujo-caja" style="display:none;">
+        <p class="hint">Histórico real, año contra año (método directo aplicado en retrospectiva).</p>
+        <table class="data-table" id="tabla-flujo-caja-anual">
+          <thead><tr><th>Año</th><th>Ingresos reales</th><th>Egresos reales</th><th>Flujo neto</th><th>Saldo acumulado fin de año</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p id="fc-anual-proyectado-resto"></p>
+      </div>
     </section>
 
     <!-- CATALOGOS -->

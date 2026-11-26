@@ -96,6 +96,7 @@ function initNav() {
       if (btn.dataset.view === "compras") loadCompras();
       if (btn.dataset.view === "caja") loadCaja();
       if (btn.dataset.view === "cobros-pagos") loadCobrosYPagos();
+      if (btn.dataset.view === "flujo-caja") loadFlujoCaja();
       if (btn.dataset.view === "catalogos") loadCatalogos();
       if (btn.dataset.view === "informes") loadInformes();
     });
@@ -662,6 +663,104 @@ function initCobrosYPagos() {
       if (btnVer) {
         abrirPanelVer(btnVer.dataset.tipo, btnVer.dataset.id);
       }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Flujo de Caja Proyectado -- reporte (diaria / mensual / anual)
+// ---------------------------------------------------------------------------
+
+let FC_SUBVISTA_ACTUAL = "diario";
+
+function filaVencidaTexto(valorProyectado, valorVencido) {
+  if (!valorVencido) return fmtMoney(valorProyectado);
+  return `${fmtMoney(valorProyectado)} (⚠ ${fmtMoney(valorVencido)} vencido)`;
+}
+
+async function loadFlujoCajaDiario() {
+  const data = await apiGet("/flujo-caja/diario");
+  document.getElementById("fc-diario-fecha-inicio").textContent = fmtFecha(data.fecha_inicio);
+  document.getElementById("fc-diario-saldo-apertura").textContent = fmtMoney(data.saldo_apertura);
+  const tbody = document.querySelector("#tabla-flujo-caja-diario tbody");
+  tbody.innerHTML = "";
+  data.dias.forEach((d) => {
+    const tr = document.createElement("tr");
+    if (d.ingresos_vencidos > 0 || d.egresos_vencidos > 0) tr.classList.add("fila-vencido");
+    if (d.es_hoy) tr.classList.add("fila-hoy");
+    tr.innerHTML = `
+      <td>${fmtFecha(d.fecha)}${d.es_hoy ? " (hoy)" : ""}</td>
+      <td>${fmtMoney(d.ingresos_reales)}</td>
+      <td>${fmtMoney(d.egresos_reales)}</td>
+      <td>${filaVencidaTexto(d.ingresos_proyectados, d.ingresos_vencidos)}</td>
+      <td>${filaVencidaTexto(d.egresos_proyectados, d.egresos_vencidos)}</td>
+      <td>${fmtMoney(d.flujo_neto)}</td>
+      <td>${fmtMoney(d.saldo_acumulado)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadFlujoCajaMensual() {
+  const data = await apiGet("/flujo-caja/mensual");
+  document.getElementById("fc-mensual-saldo-apertura").textContent = fmtMoney(data.saldo_apertura);
+  const tbody = document.querySelector("#tabla-flujo-caja-mensual tbody");
+  tbody.innerHTML = "";
+  data.meses.forEach((m) => {
+    const tr = document.createElement("tr");
+    if (m.ingresos_vencidos > 0 || m.egresos_vencidos > 0) tr.classList.add("fila-vencido");
+    if (m.es_mes_actual) tr.classList.add("fila-hoy");
+    tr.innerHTML = `
+      <td>${m.etiqueta}${m.es_mes_actual ? " (actual)" : ""}</td>
+      <td>${fmtMoney(m.ingresos_reales)}</td>
+      <td>${fmtMoney(m.egresos_reales)}</td>
+      <td>${filaVencidaTexto(m.ingresos_proyectados, m.ingresos_vencidos)}</td>
+      <td>${filaVencidaTexto(m.egresos_proyectados, m.egresos_vencidos)}</td>
+      <td>${fmtMoney(m.flujo_neto)}</td>
+      <td>${fmtMoney(m.saldo_acumulado)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadFlujoCajaAnual() {
+  const data = await apiGet("/flujo-caja/anual");
+  const tbody = document.querySelector("#tabla-flujo-caja-anual tbody");
+  tbody.innerHTML = "";
+  data.anios.forEach((a) => {
+    const tr = document.createElement("tr");
+    if (a.es_anio_actual) tr.classList.add("fila-hoy");
+    tr.innerHTML = `
+      <td>${a.anio}${a.es_anio_actual ? " (actual)" : ""}</td>
+      <td>${fmtMoney(a.ingresos_reales)}</td>
+      <td>${fmtMoney(a.egresos_reales)}</td>
+      <td>${fmtMoney(a.flujo_neto)}</td>
+      <td>${fmtMoney(a.saldo_acumulado_fin_anio)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  const p = data.proyectado_resto_anio_actual;
+  document.getElementById("fc-anual-proyectado-resto").textContent =
+    `Proyectado pendiente para lo que resta de ${p.anio}: ingresos ${fmtMoney(p.ingresos_proyectados)}, egresos ${fmtMoney(p.egresos_proyectados)}.`;
+}
+
+async function loadFlujoCaja() {
+  if (FC_SUBVISTA_ACTUAL === "diario") await loadFlujoCajaDiario();
+  else if (FC_SUBVISTA_ACTUAL === "mensual") await loadFlujoCajaMensual();
+  else await loadFlujoCajaAnual();
+}
+
+function initFlujoCaja() {
+  document.querySelectorAll(".subnav-btn[data-subvista-fc]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".subnav-btn[data-subvista-fc]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".subvista-flujo-caja").forEach((v) => {
+        v.style.display = "none";
+      });
+      FC_SUBVISTA_ACTUAL = btn.dataset.subvistaFc;
+      document.getElementById(`fc-subvista-${FC_SUBVISTA_ACTUAL}`).style.display = "";
+      loadFlujoCaja();
     });
   });
 }
@@ -1379,6 +1478,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initFormCompra();
   initFormCaja();
   initCobrosYPagos();
+  initFlujoCaja();
   initFormTercero();
   initFormProducto();
   initFormCentro();
