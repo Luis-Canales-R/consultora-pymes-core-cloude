@@ -266,6 +266,7 @@ async function loadVentas() {
       <td>${v.cliente}</td>
       <td>${v.centro_costo || "—"}</td>
       <td>${fmtFecha(v.fecha_emision)}</td>
+      <td>${v.fecha_vencimiento ? fmtFecha(v.fecha_vencimiento) : "—"}</td>
       <td>${fmtMoney(v.monto_neto)}</td>
       <td>${fmtMoney(v.monto_iva)}</td>
       <td>${fmtMoney(v.monto_total)}</td>
@@ -403,6 +404,7 @@ async function loadCompras() {
       <td>${c.proveedor}</td>
       <td>${c.centro_costo || "—"}</td>
       <td>${fmtFecha(c.fecha_emision)}</td>
+      <td>${c.fecha_vencimiento_pago ? fmtFecha(c.fecha_vencimiento_pago) : "—"}</td>
       <td>${fmtMoney(c.monto_neto)}</td>
       <td>${fmtMoney(c.monto_iva)}</td>
       <td>${fmtMoney(c.monto_total)}</td>

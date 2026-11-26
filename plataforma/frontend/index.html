@@ -96,6 +96,7 @@
           <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
         </label>
         <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
+        <label>Fecha vencimiento <input type="date" name="fecha_vencimiento"></label>
         <label>Estado
           <select name="estado_venta">
             <option value="DEVENGADO">Devengado</option>
@@ -104,6 +105,7 @@
           </select>
         </label>
       </form>
+      <p class="hint">"Fecha vencimiento" es la fecha en que se espera cobrar esta factura (ej. a 30/60/90 días de la emisión) — se usa para el Flujo de Caja Proyectado. Déjala vacía si no corresponde (ej. venta al contado).</p>
 
       <div class="line-builder form-grid" id="venta-line-builder">
         <label>Producto/Servicio
@@ -125,7 +127,7 @@
       <span class="form-msg" id="msg-venta"></span>
 
       <table class="data-table" id="tabla-ventas">
-        <thead><tr><th>Folio</th><th>Cliente</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
+        <thead><tr><th>Folio</th><th>Cliente</th><th>Centro costo</th><th>Fecha</th><th>Vencimiento</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="carga-masiva" id="carga-masiva-ventas" data-modulo="ventas">
@@ -155,6 +157,7 @@
           <select name="id_centro_costo"><option value="">(sin asignar)</option></select>
         </label>
         <label>Fecha emisión <input type="date" name="fecha_emision" required></label>
+        <label>Fecha vencimiento pago <input type="date" name="fecha_vencimiento_pago"></label>
         <label>Descripción <input name="descripcion" placeholder="(solo modo demo SQLite)"></label>
         <label>Estado
           <select name="estado_oc">
@@ -165,6 +168,7 @@
           </select>
         </label>
       </form>
+      <p class="hint">"Fecha vencimiento pago" es la fecha en que se espera pagar este documento (ej. a 30/60/90 días de la emisión) — se usa para el Flujo de Caja Proyectado. Déjala vacía si no corresponde (ej. compra al contado).</p>
 
       <div class="line-builder form-grid" id="compra-line-builder">
         <label>Producto/Servicio
@@ -186,7 +190,7 @@
       <span class="form-msg" id="msg-compra"></span>
 
       <table class="data-table" id="tabla-compras">
-        <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
+        <thead><tr><th>Folio</th><th>Proveedor</th><th>Centro costo</th><th>Fecha</th><th>Vencimiento pago</th><th>Neto</th><th>IVA</th><th>Total</th><th>Estado</th></tr></thead>
         <tbody></tbody>
       </table>
       <div class="carga-masiva" id="carga-masiva-compras" data-modulo="compras">

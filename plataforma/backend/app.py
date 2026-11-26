@@ -1202,6 +1202,17 @@ def crear_venta():
                     id_asiento_actual,
                 )
 
+            # fecha_vencimiento es un dato de ENCABEZADO del documento (no
+            # de cada línea), así que se actualiza una sola vez al final,
+            # directo sobre la tabla -- no hace falta pasarla al SP, que ya
+            # resuelve correctamente la creación/actualización de las
+            # demás columnas del encabezado línea a línea.
+            if payload.get("fecha_vencimiento"):
+                conn.execute(
+                    "UPDATE tbl_ventas_devengadas SET fecha_vencimiento = ? WHERE folio_factura = ?",
+                    (payload["fecha_vencimiento"], payload["folio_factura"]),
+                )
+
             conn.commit()
             resultado = db.fetch_one_dict(
                 conn,
@@ -1648,6 +1659,16 @@ def crear_compra():
                     linea["cantidad"], linea["precio_unitario"],
                     payload.get("estado_oc", "RECIBIDA"), payload.get("id_centro_costo"),
                     id_asiento_actual,
+                )
+
+            # fecha_vencimiento_pago es un dato de ENCABEZADO del documento
+            # (no de cada línea), así que se actualiza una sola vez al
+            # final, directo sobre la tabla -- mismo patrón que
+            # fecha_vencimiento en Ventas.
+            if payload.get("fecha_vencimiento_pago"):
+                conn.execute(
+                    "UPDATE tbl_ordenes_compra SET fecha_vencimiento_pago = ? WHERE folio_oc = ?",
+                    (payload["fecha_vencimiento_pago"], payload["folio_oc"]),
                 )
 
             conn.commit()
