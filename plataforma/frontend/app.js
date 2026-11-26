@@ -740,8 +740,16 @@ function renderCascadaFlujoCaja(data) {
 }
 
 async function loadFlujoCaja() {
-  const data = await apiGet(`/flujo-caja/cascada/${FC_SUBVISTA_ACTUAL}`);
-  renderCascadaFlujoCaja(data);
+  const thead = document.querySelector("#tabla-flujo-caja-cascada thead");
+  const tbody = document.querySelector("#tabla-flujo-caja-cascada tbody");
+  thead.innerHTML = "";
+  tbody.innerHTML = "<tr><td>Cargando…</td></tr>";
+  try {
+    const data = await apiGet(`/flujo-caja/cascada/${FC_SUBVISTA_ACTUAL}`);
+    renderCascadaFlujoCaja(data);
+  } catch (err) {
+    tbody.innerHTML = `<tr><td style="color:#b42318;">Error al cargar el Flujo de Caja: ${err.message}</td></tr>`;
+  }
 }
 
 function initFlujoCaja() {
