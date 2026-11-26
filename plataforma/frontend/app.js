@@ -95,6 +95,7 @@ function initNav() {
       if (btn.dataset.view === "ventas") loadVentas();
       if (btn.dataset.view === "compras") loadCompras();
       if (btn.dataset.view === "caja") loadCaja();
+      if (btn.dataset.view === "cobros-pagos") loadCobrosYPagos();
       if (btn.dataset.view === "catalogos") loadCatalogos();
       if (btn.dataset.view === "informes") loadInformes();
     });
@@ -497,6 +498,171 @@ function initFormCaja() {
     } catch (err) {
       showMsg("msg-caja", err.message, false);
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cobros y Pagos (Flujo de Caja Proyectado -- Fase A)
+// ---------------------------------------------------------------------------
+// Cuentas por Cobrar (Ventas) / Cuentas por Pagar (Compras), con aplicación
+// de pagos (parcial o total) contra movimientos de Caja reales. Ver backend
+// app.py (/api/cuentas-por-cobrar, /api/cuentas-por-pagar,
+// /api/caja/aplicables, /api/aplicaciones-pago) y el plan del proyecto
+// (Hallazgo del Flujo de Caja Proyectado, Fase A).
+
+async function loadCobrosYPagos() {
+  const cxc = await apiGet("/cuentas-por-cobrar");
+  const tbodyCxc = document.querySelector("#tabla-cuentas-por-cobrar tbody");
+  tbodyCxc.innerHTML = "";
+  cxc.forEach((v) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${v.folio_factura}</td>
+      <td>${v.tercero}</td>
+      <td>${fmtFecha(v.fecha_emision)}</td>
+      <td>${v.fecha_vencimiento ? fmtFecha(v.fecha_vencimiento) : "—"}</td>
+      <td>${fmtMoney(v.monto_total)}</td>
+      <td>${fmtMoney(v.monto_aplicado)}</td>
+      <td>${fmtMoney(v.saldo_pendiente)}</td>
+      <td>${v.estado_pago}</td>
+      <td>
+        <button type="button" class="btn-link" data-accion="aplicar" data-tipo="VENTA" data-id="${v.id_venta_devengada}" data-saldo="${v.saldo_pendiente}" data-doc="Factura ${v.folio_factura} — ${v.tercero}">Aplicar</button>
+        <button type="button" class="btn-link" data-accion="ver-aplicaciones" data-tipo="VENTA" data-id="${v.id_venta_devengada}">Ver aplicaciones</button>
+      </td>`;
+    tbodyCxc.appendChild(tr);
+  });
+
+  const cxp = await apiGet("/cuentas-por-pagar");
+  const tbodyCxp = document.querySelector("#tabla-cuentas-por-pagar tbody");
+  tbodyCxp.innerHTML = "";
+  cxp.forEach((c) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${c.folio_oc}</td>
+      <td>${c.tercero}</td>
+      <td>${fmtFecha(c.fecha_emision)}</td>
+      <td>${c.fecha_vencimiento_pago ? fmtFecha(c.fecha_vencimiento_pago) : "—"}</td>
+      <td>${fmtMoney(c.monto_total)}</td>
+      <td>${fmtMoney(c.monto_aplicado)}</td>
+      <td>${fmtMoney(c.saldo_pendiente)}</td>
+      <td>${c.estado_pago}</td>
+      <td>
+        <button type="button" class="btn-link" data-accion="aplicar" data-tipo="COMPRA" data-id="${c.id_orden_compra}" data-saldo="${c.saldo_pendiente}" data-doc="OC ${c.folio_oc} — ${c.tercero}">Aplicar</button>
+        <button type="button" class="btn-link" data-accion="ver-aplicaciones" data-tipo="COMPRA" data-id="${c.id_orden_compra}">Ver aplicaciones</button>
+      </td>`;
+    tbodyCxp.appendChild(tr);
+  });
+}
+
+function initCobrosYPagos() {
+  const panelAplicar = document.getElementById("panel-aplicar-pago");
+  const panelVer = document.getElementById("panel-ver-aplicaciones");
+  const selectMovimiento = document.getElementById("aplicar-pago-movimiento");
+  const inputMonto = document.getElementById("aplicar-pago-monto");
+  let contextoAplicar = null; // { tipo, id }
+  let contextoVer = null; // { tipo, id }
+
+  async function abrirPanelAplicar(tipo, id, saldo, docLabel) {
+    contextoAplicar = { tipo, id, saldo: Number(saldo) };
+    document.getElementById("aplicar-pago-doc-info").textContent =
+      `${docLabel} — Saldo pendiente: ${fmtMoney(saldo)}`;
+
+    const tipoFlujo = tipo === "VENTA" ? "INGRESO" : "EGRESO";
+    const movimientos = await apiGet(`/caja/aplicables?tipo_flujo=${tipoFlujo}`);
+    selectMovimiento.innerHTML = movimientos
+      .map((m) => {
+        const label = `#${m.id_movimiento} · ${fmtFecha(m.fecha_movimiento)} · ${m.tercero || "(sin tercero)"} · disponible ${fmtMoney(m.monto_disponible)}`;
+        return `<option value="${m.id_movimiento}" data-disponible="${m.monto_disponible}">${label}</option>`;
+      })
+      .join("");
+
+    if (movimientos.length === 0) {
+      showMsg("msg-aplicar-pago", `No hay movimientos de Caja de tipo ${tipoFlujo} con saldo disponible.`, false);
+    }
+
+    const actualizarMontoSugerido = () => {
+      const opt = selectMovimiento.selectedOptions[0];
+      const disponible = opt ? Number(opt.dataset.disponible) : 0;
+      inputMonto.value = Math.min(disponible, contextoAplicar.saldo).toFixed(2);
+    };
+    selectMovimiento.onchange = actualizarMontoSugerido;
+    actualizarMontoSugerido();
+
+    panelAplicar.style.display = "block";
+    panelVer.style.display = "none";
+  }
+
+  document.getElementById("aplicar-pago-cancelar").addEventListener("click", () => {
+    panelAplicar.style.display = "none";
+  });
+
+  document.getElementById("aplicar-pago-confirmar").addEventListener("click", async () => {
+    if (!contextoAplicar || !selectMovimiento.value) {
+      return showMsg("msg-aplicar-pago", "Selecciona un movimiento de Caja.", false);
+    }
+    const payload = {
+      id_movimiento: Number(selectMovimiento.value),
+      tipo_documento: contextoAplicar.tipo,
+      monto_aplicado: Number(inputMonto.value),
+    };
+    if (contextoAplicar.tipo === "VENTA") payload.id_venta_devengada = contextoAplicar.id;
+    else payload.id_orden_compra = contextoAplicar.id;
+
+    try {
+      await apiPost("/aplicaciones-pago", payload);
+      showMsg("msg-aplicar-pago", "Pago aplicado.");
+      panelAplicar.style.display = "none";
+      loadCobrosYPagos();
+      loadCaja();
+    } catch (err) {
+      showMsg("msg-aplicar-pago", err.message, false);
+    }
+  });
+
+  async function abrirPanelVer(tipo, id) {
+    contextoVer = { tipo, id };
+    const query = tipo === "VENTA" ? `id_venta_devengada=${id}` : `id_orden_compra=${id}`;
+    const aplicaciones = await apiGet(`/aplicaciones-pago?${query}`);
+    const tbody = document.querySelector("#tabla-aplicaciones tbody");
+    tbody.innerHTML = "";
+    aplicaciones.forEach((a) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${fmtFecha(a.fecha_aplicacion)}</td>
+        <td>#${a.id_movimiento}</td>
+        <td>${fmtMoney(a.monto_aplicado)}</td>
+        <td><button type="button" class="btn-link btn-link-danger" data-accion="desvincular" data-id="${a.id_aplicacion}">Desvincular</button></td>`;
+      tbody.appendChild(tr);
+    });
+    panelVer.style.display = "block";
+    panelAplicar.style.display = "none";
+  }
+
+  document.getElementById("ver-aplicaciones-cerrar").addEventListener("click", () => {
+    panelVer.style.display = "none";
+  });
+
+  document.querySelector("#tabla-aplicaciones tbody").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-accion='desvincular']");
+    if (!btn) return;
+    if (!confirm("¿Desvincular esta aplicación? El documento vuelve a quedar pendiente por ese monto.")) return;
+    await apiPost(`/aplicaciones-pago/${btn.dataset.id}/desactivar`, {});
+    abrirPanelVer(contextoVer.tipo, contextoVer.id);
+    loadCobrosYPagos();
+  });
+
+  ["#tabla-cuentas-por-cobrar tbody", "#tabla-cuentas-por-pagar tbody"].forEach((sel) => {
+    document.querySelector(sel).addEventListener("click", (e) => {
+      const btnAplicar = e.target.closest("button[data-accion='aplicar']");
+      if (btnAplicar) {
+        abrirPanelAplicar(btnAplicar.dataset.tipo, btnAplicar.dataset.id, btnAplicar.dataset.saldo, btnAplicar.dataset.doc);
+        return;
+      }
+      const btnVer = e.target.closest("button[data-accion='ver-aplicaciones']");
+      if (btnVer) {
+        abrirPanelVer(btnVer.dataset.tipo, btnVer.dataset.id);
+      }
+    });
   });
 }
 
@@ -1212,6 +1378,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initFormVenta();
   initFormCompra();
   initFormCaja();
+  initCobrosYPagos();
   initFormTercero();
   initFormProducto();
   initFormCentro();

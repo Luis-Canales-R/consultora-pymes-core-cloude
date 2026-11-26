@@ -15,6 +15,7 @@
       <button class="nav-btn" data-view="ventas">🧾 Ventas</button>
       <button class="nav-btn" data-view="compras">📦 Compras y Gastos</button>
       <button class="nav-btn" data-view="caja">💰 Caja</button>
+      <button class="nav-btn" data-view="cobros-pagos">💵 Cobros y Pagos</button>
       <button class="nav-btn" data-view="catalogos">📇 Catálogos</button>
       <button class="nav-btn" data-view="informes">📈 Informes</button>
     </nav>
@@ -251,6 +252,51 @@
         </form>
         <div class="reporte-carga"></div>
       </div>
+    </section>
+
+    <!-- COBROS Y PAGOS (Flujo de Caja Proyectado - Fase A) -->
+    <section id="view-cobros-pagos" class="view">
+      <div class="panel-header">
+        <h2>Cobros y Pagos</h2>
+      </div>
+      <p class="hint">Aplica un movimiento de Caja real contra una venta o compra pendiente (total o parcial). El saldo pendiente de cada documento se recalcula solo. Si aplicaste algo por error, puedes desvincularlo desde "Ver aplicaciones".</p>
+
+      <div class="panel" id="panel-aplicar-pago" style="display:none;">
+        <h3>Aplicar pago</h3>
+        <p id="aplicar-pago-doc-info"></p>
+        <div class="form-grid">
+          <label>Movimiento de Caja disponible
+            <select id="aplicar-pago-movimiento"></select>
+          </label>
+          <label>Monto a aplicar
+            <input type="number" step="0.01" min="0.01" id="aplicar-pago-monto">
+          </label>
+        </div>
+        <button type="button" id="aplicar-pago-confirmar">Confirmar aplicación</button>
+        <button type="button" id="aplicar-pago-cancelar">Cancelar</button>
+        <span class="form-msg" id="msg-aplicar-pago"></span>
+      </div>
+
+      <div class="panel" id="panel-ver-aplicaciones" style="display:none;">
+        <h3>Aplicaciones de este documento</h3>
+        <table class="data-table" id="tabla-aplicaciones">
+          <thead><tr><th>Fecha</th><th>Movimiento</th><th>Monto aplicado</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button type="button" id="ver-aplicaciones-cerrar">Cerrar</button>
+      </div>
+
+      <h3>Cuentas por Cobrar (Ventas)</h3>
+      <table class="data-table" id="tabla-cuentas-por-cobrar">
+        <thead><tr><th>Folio</th><th>Cliente</th><th>Emisión</th><th>Vencimiento</th><th>Total</th><th>Aplicado</th><th>Saldo pendiente</th><th>Estado</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <h3>Cuentas por Pagar (Compras)</h3>
+      <table class="data-table" id="tabla-cuentas-por-pagar">
+        <thead><tr><th>Folio</th><th>Proveedor</th><th>Emisión</th><th>Vencimiento pago</th><th>Total</th><th>Aplicado</th><th>Saldo pendiente</th><th>Estado</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <!-- CATALOGOS -->
