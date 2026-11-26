@@ -2078,6 +2078,243 @@ def crear_movimiento_caja():
     return jsonify({"id_movimiento": new_id}), 201
 
 
+# --- Flujo de Caja Proyectado -- Fase A: Cuentas por Cobrar/Pagar y --------
+# aplicaciones de pago (cash application). Disponible solo en modo mssql:
+# las tablas/vistas nuevas (tbl_aplicaciones_pago, vw_cuentas_por_cobrar,
+# vw_cuentas_por_pagar, vw_movimientos_caja_saldo_aplicacion) solo existen
+# en el esquema real -- el esquema sqlite (demo) nunca tuvo
+# tbl_ordenes_compra/tbl_ventas_devengadas, así que esta funcionalidad no
+# tiene sentido ahí (mismo criterio que los Informes, ver Hallazgo #10 del
+# plan del proyecto).
+
+def _requiere_mssql():
+    """Devuelve una respuesta de error si no estamos en modo mssql, o None
+    si se puede continuar. Usar como: `err = _requiere_mssql(); if err: return err`."""
+    if db.DB_ENGINE != "mssql":
+        return error("Esta funcionalidad (Flujo de Caja Proyectado) solo está disponible en modo mssql.", 501)
+    return None
+
+
+@app.route("/api/cuentas-por-cobrar", methods=["GET"])
+def listar_cuentas_por_cobrar():
+    err = _requiere_mssql()
+    if err:
+        return err
+    solo_pendientes = request.args.get("solo_pendientes", "true").lower() != "false"
+    conn = db.get_conn()
+    sql = """SELECT v.id_venta_devengada, v.folio_factura, v.id_tercero, t.razon_social AS tercero,
+                     v.fecha_emision, v.fecha_vencimiento, v.monto_total, v.monto_aplicado,
+                     v.saldo_pendiente, v.estado_pago, v.id_centro_costo, c.nombre_cc AS centro_costo
+              FROM vw_cuentas_por_cobrar v
+              LEFT JOIN tbl_terceros t ON t.id_tercero = v.id_tercero
+              LEFT JOIN tbl_centros_costo c ON c.id_centro_costo = v.id_centro_costo"""
+    if solo_pendientes:
+        sql += " WHERE v.estado_pago <> 'PAGADO'"
+    sql += " ORDER BY v.fecha_vencimiento ASC, v.id_venta_devengada ASC"
+    rows = db.fetch_dicts(conn, sql)
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route("/api/cuentas-por-pagar", methods=["GET"])
+def listar_cuentas_por_pagar():
+    err = _requiere_mssql()
+    if err:
+        return err
+    solo_pendientes = request.args.get("solo_pendientes", "true").lower() != "false"
+    conn = db.get_conn()
+    sql = """SELECT c.id_orden_compra, c.folio_oc, c.id_tercero, t.razon_social AS tercero,
+                     c.fecha_emision, c.fecha_vencimiento_pago, c.monto_total, c.monto_aplicado,
+                     c.saldo_pendiente, c.estado_pago, c.id_centro_costo, cc.nombre_cc AS centro_costo
+              FROM vw_cuentas_por_pagar c
+              LEFT JOIN tbl_terceros t ON t.id_tercero = c.id_tercero
+              LEFT JOIN tbl_centros_costo cc ON cc.id_centro_costo = c.id_centro_costo"""
+    if solo_pendientes:
+        sql += " WHERE c.estado_pago <> 'PAGADO'"
+    sql += " ORDER BY c.fecha_vencimiento_pago ASC, c.id_orden_compra ASC"
+    rows = db.fetch_dicts(conn, sql)
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route("/api/caja/aplicables", methods=["GET"])
+def listar_caja_aplicables():
+    """Movimientos de Caja con saldo disponible para aplicar contra un
+    documento (saldo_disponible > 0), opcionalmente filtrados por
+    tipo_flujo (INGRESO para aplicar a Ventas, EGRESO para Compras)."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    tipo_flujo = request.args.get("tipo_flujo")
+    conn = db.get_conn()
+    sql = """SELECT s.id_movimiento, s.fecha_movimiento, s.tipo_flujo, s.id_tercero,
+                     t.razon_social AS tercero, s.monto_absoluto, s.monto_aplicado, s.monto_disponible
+              FROM vw_movimientos_caja_saldo_aplicacion s
+              LEFT JOIN tbl_terceros t ON t.id_tercero = s.id_tercero
+              WHERE s.monto_disponible > 0"""
+    params = ()
+    if tipo_flujo:
+        sql += " AND s.tipo_flujo = ?"
+        params = (tipo_flujo,)
+    sql += " ORDER BY s.fecha_movimiento DESC, s.id_movimiento DESC"
+    rows = db.fetch_dicts(conn, sql, params)
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route("/api/aplicaciones-pago", methods=["GET"])
+def listar_aplicaciones_pago():
+    """Lista las aplicaciones activas de un movimiento o de un documento
+    (pasar exactamente uno de los tres filtros)."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    id_movimiento = request.args.get("id_movimiento")
+    id_venta_devengada = request.args.get("id_venta_devengada")
+    id_orden_compra = request.args.get("id_orden_compra")
+    conn = db.get_conn()
+    sql = """SELECT ap.id_aplicacion, ap.id_movimiento, ap.tipo_documento, ap.id_venta_devengada,
+                     ap.id_orden_compra, ap.monto_aplicado, ap.fecha_aplicacion, ap.observacion
+              FROM tbl_aplicaciones_pago ap
+              WHERE ap.estado_activo = 1"""
+    params = []
+    if id_movimiento:
+        sql += " AND ap.id_movimiento = ?"
+        params.append(id_movimiento)
+    if id_venta_devengada:
+        sql += " AND ap.id_venta_devengada = ?"
+        params.append(id_venta_devengada)
+    if id_orden_compra:
+        sql += " AND ap.id_orden_compra = ?"
+        params.append(id_orden_compra)
+    sql += " ORDER BY ap.fecha_aplicacion DESC"
+    rows = db.fetch_dicts(conn, sql, tuple(params))
+    conn.close()
+    return jsonify(rows)
+
+
+@app.route("/api/aplicaciones-pago", methods=["POST"])
+def crear_aplicacion_pago():
+    """Aplica un movimiento de Caja real contra una venta o compra
+    pendiente, por un monto que puede ser parcial o total. Valida que el
+    monto no exceda ni el saldo pendiente del documento ni el saldo
+    disponible del movimiento (un mismo movimiento puede repartirse entre
+    varios documentos, así que no basta con mirar el monto total del
+    movimiento -- hay que mirar lo ya aplicado antes)."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    payload = request.get_json(force=True)
+    missing = require_fields(payload, ["id_movimiento", "tipo_documento", "monto_aplicado"])
+    if missing:
+        return error(missing)
+    tipo_documento = payload["tipo_documento"]
+    if tipo_documento not in ("VENTA", "COMPRA"):
+        return error("tipo_documento debe ser 'VENTA' o 'COMPRA'.")
+    id_venta_devengada = payload.get("id_venta_devengada")
+    id_orden_compra = payload.get("id_orden_compra")
+    if tipo_documento == "VENTA" and not id_venta_devengada:
+        return error("Falta id_venta_devengada.")
+    if tipo_documento == "COMPRA" and not id_orden_compra:
+        return error("Falta id_orden_compra.")
+    try:
+        monto_aplicado = float(payload["monto_aplicado"])
+    except (TypeError, ValueError):
+        return error("monto_aplicado inválido.")
+    if monto_aplicado <= 0:
+        return error("monto_aplicado debe ser mayor a 0.")
+
+    conn = db.get_conn()
+    try:
+        movimiento = db.fetch_one_dict(
+            conn, "SELECT tipo_flujo, monto_disponible FROM vw_movimientos_caja_saldo_aplicacion WHERE id_movimiento = ?",
+            (payload["id_movimiento"],),
+        )
+        if not movimiento:
+            raise ValueError("El movimiento de Caja indicado no existe.")
+        tipo_flujo_esperado = "INGRESO" if tipo_documento == "VENTA" else "EGRESO"
+        if movimiento["tipo_flujo"] != tipo_flujo_esperado:
+            raise ValueError(
+                f"Un movimiento de tipo '{movimiento['tipo_flujo']}' no puede aplicarse a una {tipo_documento.lower()} "
+                f"(se esperaba '{tipo_flujo_esperado}')."
+            )
+        if monto_aplicado > float(movimiento["monto_disponible"]):
+            raise ValueError(
+                f"El monto excede el saldo disponible del movimiento (disponible: {movimiento['monto_disponible']})."
+            )
+
+        if tipo_documento == "VENTA":
+            doc = db.fetch_one_dict(
+                conn, "SELECT saldo_pendiente FROM vw_cuentas_por_cobrar WHERE id_venta_devengada = ?",
+                (id_venta_devengada,),
+            )
+        else:
+            doc = db.fetch_one_dict(
+                conn, "SELECT saldo_pendiente FROM vw_cuentas_por_pagar WHERE id_orden_compra = ?",
+                (id_orden_compra,),
+            )
+        if not doc:
+            raise ValueError("El documento indicado no existe.")
+        if monto_aplicado > float(doc["saldo_pendiente"]):
+            raise ValueError(
+                f"El monto excede el saldo pendiente del documento (pendiente: {doc['saldo_pendiente']})."
+            )
+
+        cur = conn.execute(
+            """INSERT INTO tbl_aplicaciones_pago
+               (id_movimiento, tipo_documento, id_venta_devengada, id_orden_compra, monto_aplicado, observacion)
+               OUTPUT INSERTED.id_aplicacion
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                payload["id_movimiento"], tipo_documento, id_venta_devengada, id_orden_compra,
+                monto_aplicado, payload.get("observacion"),
+            ),
+        )
+        id_aplicacion = cur.fetchone()[0]
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return error(f"No se pudo aplicar el pago: {exc}")
+    conn.close()
+    return jsonify({"id_aplicacion": id_aplicacion}), 201
+
+
+@app.route("/api/aplicaciones-pago/<int:id_aplicacion>/desactivar", methods=["POST"])
+def desactivar_aplicacion_pago(id_aplicacion):
+    """Desvincula una aplicación de pago mal hecha (ej. un ingreso
+    aplicado a la compra equivocada). Soft-delete: nunca se borra la fila,
+    solo se desactiva -- el saldo pendiente del documento y el disponible
+    del movimiento se recalculan solos al quedar excluida de las vistas."""
+    err = _requiere_mssql()
+    if err:
+        return err
+    conn = db.get_conn()
+    try:
+        existente = db.fetch_one_dict(
+            conn, "SELECT id_aplicacion FROM tbl_aplicaciones_pago WHERE id_aplicacion = ? AND estado_activo = 1",
+            (id_aplicacion,),
+        )
+        if not existente:
+            raise ValueError("La aplicación no existe o ya estaba desactivada.")
+        conn.execute(
+            "UPDATE tbl_aplicaciones_pago SET estado_activo = 0 WHERE id_aplicacion = ?", (id_aplicacion,)
+        )
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        return error(f"No se pudo desvincular la aplicación: {exc}")
+    conn.close()
+    return jsonify({"ok": True})
+
+
 # --- Carga masiva de Caja (Fase 5) -----------------------------------------
 # A diferencia de Ventas/Compras, un movimiento de Caja es siempre una fila
 # independiente (no hay folio que agrupe varias filas en un documento), así
