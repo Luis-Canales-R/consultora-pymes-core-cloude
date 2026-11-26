@@ -2568,10 +2568,15 @@ def _construir_cascada_flujo_caja(conn, fecha_inicio, fecha_fin, modo):
             else:
                 acc.sumar("COSTOS", _CLAVE_INSUMOS_SIN_CUENTA, "Materia Prima / Insumos (sin cuenta mapeada)", periodo, -monto_linea)
 
+    # vw_cuentas_por_cobrar/por_pagar (Fase A) solo exponen monto_total (no
+    # monto_neto/monto_iva) -- se completan con un join a la tabla base en
+    # vez de tocar esas vistas.
     for v in db.fetch_dicts(
         conn,
-        """SELECT id_venta_devengada, monto_neto, monto_iva, monto_total, saldo_pendiente, fecha_vencimiento
-           FROM vw_cuentas_por_cobrar WHERE saldo_pendiente > 0""",
+        """SELECT v.id_venta_devengada, t.monto_neto, t.monto_iva, v.monto_total, v.saldo_pendiente, v.fecha_vencimiento
+           FROM vw_cuentas_por_cobrar v
+           INNER JOIN tbl_ventas_devengadas t ON t.id_venta_devengada = v.id_venta_devengada
+           WHERE v.saldo_pendiente > 0""",
     ):
         fv = _a_date(v["fecha_vencimiento"])
         fecha_evento = fv if fv and fv >= hoy else hoy
@@ -2579,8 +2584,10 @@ def _construir_cascada_flujo_caja(conn, fecha_inicio, fecha_fin, modo):
 
     for c in db.fetch_dicts(
         conn,
-        """SELECT id_orden_compra, monto_neto, monto_iva, monto_total, saldo_pendiente, fecha_vencimiento_pago
-           FROM vw_cuentas_por_pagar WHERE saldo_pendiente > 0""",
+        """SELECT c.id_orden_compra, o.monto_neto, o.monto_iva, c.monto_total, c.saldo_pendiente, c.fecha_vencimiento_pago
+           FROM vw_cuentas_por_pagar c
+           INNER JOIN tbl_ordenes_compra o ON o.id_orden_compra = c.id_orden_compra
+           WHERE c.saldo_pendiente > 0""",
     ):
         fvp = _a_date(c["fecha_vencimiento_pago"])
         fecha_evento = fvp if fvp and fvp >= hoy else hoy
