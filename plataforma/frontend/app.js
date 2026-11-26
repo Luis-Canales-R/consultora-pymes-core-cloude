@@ -713,13 +713,22 @@ function renderCascadaFlujoCaja(data) {
   let html = "";
   html += fcFilaHtml("Saldo Inicial", data.saldo_inicial, { claseFila: "fila-subtotal" });
 
+  // Ingresos/Costos/Gastos son la columna vertebral de la cascada: se
+  // muestran siempre (con "Total" en $0 si no hay cuentas con movimiento
+  // en el periodo), para que Margen Bruto y Resultado antes de
+  // Compromisos también se muestren siempre, sin "saltarse" secciones.
+  // Otros movimientos / Sin clasificar son excepcionales: se ocultan si
+  // no tienen nada que mostrar.
+  const SECCIONES_SIEMPRE_VISIBLES = new Set(["INGRESOS", "COSTOS", "GASTOS"]);
+
   data.secciones.forEach((seccion) => {
-    if (seccion.clave === "COMPROMISOS" && seccion.filas.length === 0) {
+    const sinFilas = seccion.filas.length === 0;
+    if (seccion.clave === "COMPROMISOS" && sinFilas) {
       html += `<tr class="fila-seccion"><td colspan="${data.periodos.length + 1}">${seccion.nombre}</td></tr>`;
       html += `<tr class="fila-cuenta"><td>(sin compromisos recurrentes registrados todavía)</td>${data.periodos.map(() => "<td>—</td>").join("")}</tr>`;
       return;
     }
-    if (seccion.filas.length === 0) return; // Otros / Sin clasificar: ocultar si no hay nada
+    if (sinFilas && !SECCIONES_SIEMPRE_VISIBLES.has(seccion.clave)) return; // Otros / Sin clasificar: ocultar si no hay nada
     html += `<tr class="fila-seccion"><td colspan="${data.periodos.length + 1}">${seccion.nombre}</td></tr>`;
     seccion.filas.forEach((fila) => {
       html += fcFilaHtml(fila.nombre, fila.valores, { claseFila: "fila-cuenta" });
